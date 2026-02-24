@@ -1,146 +1,96 @@
 import streamlit as st
-import pandas as pd
-import plotly.express as px
 import google.generativeai as genai
 from datetime import datetime
 import pytz
 import time
 
-# --- 1. SETUP UAE TIMEZONE ---
+# --- 1. UAE TIME SETUP ---
 uae_tz = pytz.timezone('Asia/Dubai')
 
 def get_uae_now():
     return datetime.now(uae_tz)
 
-st.set_page_config(page_title="AuraFlow Live Planner", page_icon="⏰", layout="wide")
+st.set_page_config(page_title="AuraFlow | UAE Notifier", page_icon="🔔")
 
-# --- 2. THE AESTHETIC (MindFlow CSS) ---
+# --- 2. CLEAN UI STYLING ---
 st.markdown("""
     <style>
     .stApp { background-color: #F8F9FB; }
-    .clock-container {
-        background: #1A202C; color: #00F2FE; padding: 20px; 
-        border-radius: 15px; text-align: center; border: 2px solid #00F2FE;
-        box-shadow: 0 0 15px rgba(0, 242, 254, 0.2);
+    .clock-display {
+        font-size: 50px; font-family: 'Courier New', monospace;
+        font-weight: bold; color: #1E293B; text-align: center;
+        padding: 20px; background: white; border-radius: 15px;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.05); margin-bottom: 20px;
     }
-    .planner-card {
-        background: white; padding: 18px; border-radius: 14px;
-        margin-bottom: 12px; border: 1px solid #E2E8F0;
-        display: flex; align-items: center; justify-content: space-between;
+    .reminder-card {
+        background: white; padding: 15px; border-radius: 10px;
+        border-left: 5px solid #3B82F6; margin-bottom: 10px;
     }
-    .status-now { border-left: 5px solid #00F2FE; background: #E6FFFA; }
-    .status-done { border-left: 5px solid #38A169; opacity: 0.7; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 3. SESSION STATE (The Brain) ---
-if 'schedule' not in st.session_state:
-    st.session_state.schedule = []
-if 'notified_tasks' not in st.session_state:
-    st.session_state.notified_tasks = set() # Prevents duplicate popups in the same minute
-if 'water_ml' not in st.session_state:
-    st.session_state.water_ml = 0
+# --- 3. SESSION STATE ---
+if 'reminders' not in st.session_state:
+    st.session_state.reminders = []
+if 'triggered' not in st.session_state:
+    st.session_state.triggered = set() # To ensure alert only pops once
 
-# --- 4. HEADER: REAL-TIME CLOCK ---
+# --- 4. REAL-TIME CLOCK ---
 now = get_uae_now()
-current_hm = now.strftime("%H:%M") # The "Real Clock" string
+curr_time = now.strftime("%H:%M") # HH:MM for matching
+display_time = now.strftime("%H:%M:%S") # HH:MM:SS for display
 
-c1, c2 = st.columns([3, 1])
-with c1:
-    st.title("My UAE Day Planner 🇦🇪")
-    st.markdown(f"**Date:** {now.strftime('%A, %B %d, %Y')}")
+st.markdown(f'<div class="clock-display">{display_time}</div>', unsafe_allow_html=True)
 
-with c2:
-    # This visualizes the Real Clock
-    st.markdown(f"""
-        <div class="clock-container">
-            <h1 style="margin:0; font-family: monospace;">{now.strftime('%H:%M:%S')}</h1>
-            <small>UAE STANDARD TIME</small>
-        </div>
-    """, unsafe_allow_html=True)
+# --- 5. NOTIFICATION LOGIC ---
+# This checks your list every second to see if the time matches
+for r in st.session_state.reminders:
+    if r['time'] == curr_time and r['active']:
+        alert_id = f"{r['name']}_{curr_time}"
+        if alert_id not in st.session_state.triggered:
+            st.toast(f"🔔 NOTIFICATION: {r['name']}", icon="📢")
+            # Trigger a simple browser beep via JS
+            st.components.v1.html(
+                '<audio autoplay><source src="https://actions.google.com/sounds/v1/alarms/beep_short.ogg" type="audio/ogg"></audio>',
+                height=0
+            )
+            st.session_state.triggered.add(alert_id)
 
-# --- 5. NOTIFICATION ENGINE (The "Pop-Up" Logic) ---
-# 1. Task Reminders
-for task in st.session_state.schedule:
-    # If task is Pending AND time matches HH:MM AND we haven't popped up yet
-    if task['status'] == "Pending" and task['time'] == current_hm:
-        notif_id = f"{task['name']}_{current_hm}"
-        if notif_id not in st.session_state.notified_tasks:
-            st.toast(f"🔔 REMINDER: {task['name']} is starting now!", icon="⏰")
-            # We add logic here to trigger a sound via JS if needed
-            st.session_state.notified_tasks.add(notif_id)
-
-# 2. Automated Water Logic (30-min interval)
+# Auto-Water Logic (Every 30 minutes)
 if now.minute % 30 == 0 and now.second == 0:
-    st.toast("💧 HYDRATION: Time for 250ml of water!", icon="🥤")
-    st.session_state.water_ml += 250
+    st.toast("💧 HYDRATION: Drink water now!", icon="🥤")
 
-# --- 6. ADDING TO THE PLANNER ---
-st.divider()
-with st.expander("➕ Schedule a New Reminder"):
-    col_in1, col_in2, col_in3 = st.columns(3)
-    name = col_in1.text_input("Task/Meeting Name")
-    tm = col_in2.text_input("Time (Use 24h format, e.g., 15:30)", value=current_hm)
-    cat = col_in3.selectbox("Type", ["Work", "Study", "Health", "Personal"])
+# --- 6. ADD REMINDERS & AI SORTING ---
+with st.form("reminder_form", clear_on_submit=True):
+    col1, col2, col3 = st.columns([2, 1, 1])
+    name = col1.text_input("Reminder Name")
+    tm = col2.text_input("Time (HH:MM)", value=curr_time)
+    cat = col3.selectbox("Importance", ["Work", "Study", "Health", "Other"])
     
-    if st.button("Add to My Day"):
-        st.session_state.schedule.append({
-            "name": name, "time": tm, "cat": cat, "status": "Pending"
+    if st.form_submit_button("Set Alert"):
+        st.session_state.reminders.append({
+            "name": name, "time": tm, "cat": cat, "active": True
         })
-        st.success(f"Task '{name}' set for {tm}")
+        # AI-like Sorting by Category Importance
+        prio = {"Work": 1, "Study": 2, "Health": 3, "Other": 4}
+        st.session_state.reminders.sort(key=lambda x: prio.get(x['cat']))
         st.rerun()
 
-# --- 7. THE TIMELINE VIEW ---
-st.subheader("Today's Timeline")
-
-# We sort by time so the user sees a chronological day
-sorted_schedule = sorted(st.session_state.schedule, key=lambda x: x['time'])
-
-if not sorted_schedule:
-    st.info("No tasks scheduled yet.")
-else:
-    for i, t in enumerate(sorted_schedule):
-        # Determine styling based on current time
-        is_active = t['time'] == current_hm
-        card_class = "status-now" if is_active else ("status-done" if t['status'] == "Done" else "")
-        
-        st.markdown(f"""
-            <div class="planner-card {card_class}">
-                <div>
-                    <span style="font-weight:bold; color:#2D3748;">{t['time']}</span>
-                    <span style="margin-left:15px; font-size:1.1rem;">{t['name']}</span>
+# --- 7. ACTIVE REMINDERS LIST ---
+st.write("### Active Alerts")
+for i, r in enumerate(st.session_state.reminders):
+    if r['active']:
+        with st.container():
+            c_a, c_b = st.columns([4, 1])
+            c_a.markdown(f"""
+                <div class="reminder-card">
+                    <strong>{r['time']}</strong> — {r['name']} <i>({r['cat']})</i>
                 </div>
-                <div>
-                    <span style="background:#EDF2F7; padding:4px 10px; border-radius:8px; font-size:0.8rem;">{t['cat']}</span>
-                </div>
-            </div>
-        """, unsafe_allow_html=True)
-        
-        if t['status'] == "Pending":
-            if st.button("Mark Completed", key=f"done_{i}"):
-                t['status'] = "Done"
+                """, unsafe_allow_html=True)
+            if c_b.button("Delete", key=f"del_{i}"):
+                st.session_state.reminders.pop(i)
                 st.rerun()
 
-# --- 8. DASHBOARD & ANALYSIS ---
-st.divider()
-st.subheader("📈 Productivity Analysis")
-d1, d2 = st.columns(2)
-
-with d1:
-    # Progress Pie Chart
-    if sorted_schedule:
-        df = pd.DataFrame(sorted_schedule)
-        fig = px.pie(df, names='status', title="Daily Task Completion", 
-                     color_discrete_map={'Done':'#38A169', 'Pending':'#E2E8F0'},
-                     hole=0.5)
-        fig.update_layout(showlegend=False, height=250)
-        st.plotly_chart(fig, use_container_width=True)
-
-with d2:
-    st.metric("Total Water Intake", f"{st.session_state.water_ml} ml")
-    st.info("**AI Insight:** You are most active in the afternoon. Ensure your hardest 'Work' tasks are set between 14:00 and 16:00.")
-
-# --- 9. THE "HEARTBEAT" (Auto-Refresh) ---
-# This is the most important part. It keeps the clock ticking every second.
-time.sleep(1) 
+# --- 8. THE HEARTBEAT (Auto-Refresh) ---
+time.sleep(1) # Refresh every 1 second
 st.rerun()
