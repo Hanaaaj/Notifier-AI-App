@@ -1,5 +1,5 @@
 streamlit
 pandas
-matplotlib
-google-generativeai
 plotly
+google-genai
+pytz
