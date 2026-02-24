@@ -2,128 +2,121 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import google.generativeai as genai
-from datetime import datetime
-import json
+from datetime import datetime, timedelta
 import time
 
 # --- 1. SETTINGS & STYLING ---
-st.set_page_config(page_title="AuraFlow Pro", page_icon="🧠", layout="wide")
+st.set_page_config(page_title="AuraFlow: Adaptive Intelligence", page_icon="🧠", layout="wide")
 
-# Modern UI Styling
+# Custom Styling for "Gamification" and "Mood"
 st.markdown("""
     <style>
-    .main { background-color: #0e1117; }
-    div[data-testid="stMetricValue"] { color: #00ffa3; }
-    .stTabs [data-baseweb="tab-list"] { gap: 24px; }
-    .stTabs [data-baseweb="tab"] { height: 50px; white-space: pre-wrap; background-color: #1e2130; border-radius: 10px; color: white; }
+    .badge { background: #4facfe; color: white; padding: 5px 15px; border-radius: 20px; font-weight: bold; margin-right: 5px; }
+    .mood-card { background: rgba(255, 255, 255, 0.05); border-radius: 15px; padding: 15px; text-align: center; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. DATABASE MOCKUP (Persistent for Session) ---
+# --- 2. ADVANCED SESSION STATE (The App's Memory) ---
 if 'tasks' not in st.session_state:
     st.session_state.tasks = []
 if 'stats' not in st.session_state:
-    st.session_state.stats = {"completed": 0, "missed": 0, "water": 0}
+    st.session_state.stats = {"completed": 0, "missed": 0, "water": 0, "ignore_count": 0}
+if 'mood' not in st.session_state:
+    st.session_state.mood = "Neutral"
+if 'badges' not in st.session_state:
+    st.session_state.badges = []
 
-# --- 3. CORE LOGIC: NOTIFICATIONS & AI ---
-def send_notification(title, message):
-    """Triggers a browser-level notification."""
-    js = f"""<script>
-    if (Notification.permission === "granted") {{
-        new Notification("{title}", {{ body: "{message}" }});
-    }} else {{ Notification.requestPermission(); }}
-    </script>"""
-    st.components.v1.html(js, height=0)
+# --- 3. THE "ADAPTIVE" ENGINE (Logic Layer) ---
+def get_adaptive_priority(task_type):
+    # Rule-based AI: Increase urgency if user is ignoring reminders
+    if st.session_state.stats["ignore_count"] >= 3:
+        return "⚠️ HIGH URGENCY: You've missed several alerts!"
+    if st.session_state.mood == "Stressed":
+        return "🌸 TAKE IT SLOW: Focus on one thing at a time."
+    return f"Standard {task_type} Alert"
 
-def get_ai_feedback(score):
-    """Prompt Engineering: AI Analysis of the user's day."""
-    try:
-        genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        prompt = f"The user has a productivity score of {score}%. Give one actionable, supportive tip."
-        return model.generate_content(prompt).text
-    except:
-        return "Keep focusing! Consistency is the key to success."
+def check_achievements():
+    if st.session_state.stats["water"] >= 5 and "Hydration Hero" not in st.session_state.badges:
+        st.session_state.badges.append("Hydration Hero")
+    if st.session_state.stats["completed"] >= 5 and "Task Master" not in st.session_state.badges:
+        st.session_state.badges.append("Task Master")
 
-# --- 4. APP LAYOUT ---
-st.title("🌊 AuraFlow: Intelligence Notifier")
-st.caption("2026 Hackathon Submission | AI-Driven Productivity")
+# --- 4. MAIN UI ---
+st.title("🌊 AuraFlow: Adaptive Intelligence")
 
-# Request permissions early
-if st.button("🔔 Enable Background Notifications (Click First)"):
-    st.components.v1.html("<script>Notification.requestPermission();</script>", height=0)
+# Header: Mood & Badges
+c1, c2 = st.columns([1, 2])
+with c1:
+    st.session_state.mood = st.select_slider("How is your stress level?", ["Relaxed", "Neutral", "Stressed"])
+with c2:
+    st.write("### Your Achievements")
+    if not st.session_state.badges: st.write("No badges yet. Start your day!")
+    for b in st.session_state.badges:
+        st.markdown(f'<span class="badge">🏆 {b}</span>', unsafe_allow_html=True)
 
-tabs = st.tabs(["🎯 Task Manager", "📈 Analytics Dashboard", "🤖 Smart Feedback"])
+st.markdown("---")
+tabs = st.tabs(["🎯 Productivity Hub", "📈 Insight Dashboard", "🤖 AI Coach"])
 
-# --- TAB 1: TASK MANAGEMENT ---
+# --- TAB 1: PRODUCTIVITY HUB ---
 with tabs[0]:
-    col1, col2 = st.columns([1, 1])
-    with col1:
-        st.subheader("Add New Goal")
-        t_name = st.text_input("Task Title", placeholder="e.g., Weekly Sync")
-        t_type = st.selectbox("Category", ["Meeting", "Deadline", "Hydration"])
-        t_time = st.time_input("Scheduled Time", datetime.now())
-        
-        if st.button("➕ Schedule Task"):
-            st.session_state.tasks.append({
-                "id": len(st.session_state.tasks),
-                "name": t_name,
-                "type": t_type,
-                "time": t_time.strftime("%H:%M"),
-                "status": "Pending"
-            })
-            st.toast("Task added successfully!")
+    col_a, col_b = st.columns(2)
+    with col_a:
+        st.subheader("Add Task")
+        name = st.text_input("Task Name")
+        category = st.selectbox("Type", ["Work", "Hydration", "Break"])
+        if st.button("Add to Queue"):
+            st.session_state.tasks.append({"name": name, "cat": category, "status": "Pending", "time": datetime.now()})
+            st.toast("Task added to adaptive engine.")
 
-    with col2:
-        st.subheader("Pending Reminders")
-        for i, task in enumerate(st.session_state.tasks):
-            if task["status"] == "Pending":
-                with st.expander(f"{task['time']} - {task['name']} ({task['type']})"):
-                    if st.button(f"Mark Complete", key=f"done_{i}"):
-                        st.session_state.tasks[i]["status"] = "Completed"
-                        st.session_state.stats["completed"] += 1
-                        if task['type'] == "Hydration": st.session_state.stats["water"] += 1
-                        st.rerun()
-                    if st.button(f"Mark Missed", key=f"miss_{i}"):
-                        st.session_state.tasks[i]["status"] = "Missed"
-                        st.session_state.stats["missed"] += 1
-                        st.rerun()
+    with col_b:
+        st.subheader("Live Queue")
+        for i, t in enumerate(st.session_state.tasks):
+            if t['status'] == "Pending":
+                priority = get_adaptive_priority(t['cat'])
+                st.warning(f"{priority}\n\n**{t['name']}**")
+                if st.button(f"Done", key=f"d{i}"):
+                    st.session_state.tasks[i]['status'] = "Done"
+                    st.session_state.stats["completed"] += 1
+                    if t['cat'] == "Hydration": st.session_state.stats["water"] += 1
+                    st.session_state.stats["ignore_count"] = 0
+                    check_achievements()
+                    st.rerun()
+                if st.button(f"Snooze", key=f"s{i}"):
+                    st.session_state.stats["ignore_count"] += 1
+                    st.rerun()
 
-# --- TAB 2: ANALYTICS DASHBOARD ---
+# --- TAB 2: DYNAMIC DASHBOARD (Data Storytelling) ---
 with tabs[1]:
-    # Calculate Score
     total = st.session_state.stats["completed"] + st.session_state.stats["missed"]
-    score = int((st.session_state.stats["completed"] / total) * 100) if total > 0 else 100
+    score = int((st.session_state.stats["completed"] / total * 100)) if total > 0 else 0
     
-    m1, m2, m3 = st.columns(3)
-    m1.metric("Productivity Score", f"{score}%")
-    m2.metric("Completed Tasks", st.session_state.stats["completed"])
-    m3.metric("Hydration Level", f"{st.session_state.stats['water']} Cups")
+    st.subheader("Data Insights")
+    st.metric("Productivity Score", f"{score}%", delta="Adaptive Calculation")
+    
+    # "Storytelling" Insight
+    if st.session_state.stats["water"] < st.session_state.stats["completed"]:
+        st.error("📊 **Insight:** Your Work focus is high, but your Hydration is lagging. This may lead to an afternoon crash!")
+    elif score > 80:
+        st.success("📊 **Insight:** You are in a 'Flow State'. Keep this momentum!")
 
     if total > 0:
-        df = pd.DataFrame([
-            {"Label": "Completed", "Value": st.session_state.stats["completed"]},
-            {"Label": "Missed", "Value": st.session_state.stats["missed"]}
-        ])
-        fig = px.bar(df, x="Label", y="Value", color="Label", 
-                     color_discrete_map={"Completed": "#00ffa3", "Missed": "#ff4b4b"},
-                     title="Task Performance Overview")
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info("No data yet. Schedule and complete tasks to generate charts!")
+        fig = px.bar(x=["Done", "Snoozed"], y=[st.session_state.stats["completed"], st.session_state.stats["ignore_count"]], 
+                     title="Action Habits", color_discrete_sequence=['#4facfe'])
+        st.plotly_chart(fig)
 
-# --- TAB 3: SMART FEEDBACK ---
+# --- TAB 3: AI COACH (Smart Feedback Engine) ---
 with tabs[2]:
-    st.subheader("AI Performance Insights")
-    if total > 0:
-        feedback = get_ai_feedback(score)
-        st.success(feedback)
-    else:
-        st.write("Complete your first task to unlock AI insights.")
-
-# --- 5. THE BACKGROUND TICKER (Simulated) ---
-# In a real Streamlit app, this checks if current time matches scheduled tasks
-now = datetime.now().strftime("%H:%M")
-for task in st.session_state.tasks:
-    if task["time"] == now and task["status"] == "Pending":
-        send_notification(f"Time for {task['name']}!", f"Category: {task['type']}")
+    st.subheader("Personal AI Assistant")
+    if st.button("Generate Performance Analysis"):
+        try:
+            genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+            model = genai.GenerativeModel('gemini-1.5-flash')
+            prompt = f"""
+            Analyze this productivity data: 
+            Score: {score}%, Completed: {st.session_state.stats['completed']}, 
+            Water: {st.session_state.stats['water']}, Mood: {st.session_state.mood}.
+            Give a 2-sentence context-aware piece of advice.
+            """
+            st.write(model.generate_content(prompt).text)
+        except:
+            st.write("You're doing great! Keep balancing your hydration with your workload.")
