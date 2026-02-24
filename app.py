@@ -1,178 +1,142 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import google.generativeai as genai
-from datetime import datetime, timedelta
+from datetime import datetime
+import pytz
 import time
 
-# --- 1. CONFIG & MIND-FLOW STYLING ---
-st.set_page_config(page_title="AuraFlow | Smart Dashboard", page_icon="✨", layout="wide")
+# --- 1. SETTINGS & UAE TIMEZONE ---
+st.set_page_config(page_title="AuraFlow | Smart Dashboard", page_icon="🕒", layout="wide")
 
+def get_uae_now():
+    """Ensures all time objects are UAE-aware to prevent TypeErrors."""
+    uae_tz = pytz.timezone('Asia/Dubai')
+    return datetime.now(uae_tz)
+
+# --- 2. MODERN UI STYLING ---
 st.markdown("""
     <style>
     .stApp { background-color: #F8F9FB; }
-    
-    /* Modern Dashboard Cards */
     .metric-card {
-        background-color: white;
-        padding: 24px;
-        border-radius: 20px;
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.03);
-        border: 1px solid #F0F2F6;
-        margin-bottom: 20px;
+        background: white; padding: 24px; border-radius: 20px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.03); border: 1px solid #F0F2F6;
+        text-align: center;
     }
-    .metric-title { color: #5F6368; font-size: 14px; font-weight: 500; }
-    .metric-value { color: #1A1C1E; font-size: 32px; font-weight: 700; margin-top: 8px; }
-    
-    /* Smart Suggestion Container */
     .suggestion-box {
-        background-color: #FDF4FF;
-        padding: 16px;
-        border-radius: 12px;
-        border: 1px solid #FAE8FF;
-        margin-bottom: 12px;
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-    }
-    
-    /* Task Item Styling */
-    .task-item {
-        background: white; 
-        padding: 15px; 
-        border-radius: 12px; 
-        border-left: 5px solid #4facfe; 
-        margin-bottom: 10px;
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
+        background-color: #FDF4FF; padding: 16px; border-radius: 12px;
+        border: 1px solid #FAE8FF; margin-bottom: 12px;
+        border-left: 5px solid #7E22CE;
     }
     .badge-ai { background: #F3E8FF; color: #7E22CE; padding: 2px 8px; border-radius: 6px; font-size: 11px; font-weight: bold; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. SESSION STATE (The Memory) ---
+# --- 3. PERSISTENT STATE ---
 if 'tasks' not in st.session_state:
     st.session_state.tasks = []
 if 'water_ml' not in st.session_state:
     st.session_state.water_ml = 0
-if 'last_water_time' not in st.session_state:
-    st.session_state.last_water_time = datetime.now()
-if 'start_time' not in st.session_state:
-    st.session_state.start_time = datetime.now()
+if 'last_water_check' not in st.session_state:
+    st.session_state.last_water_check = get_uae_now()
+if 'notified_cache' not in st.session_state:
+    st.session_state.notified_cache = set()
 
-# --- 3. THE ENGINES (Logic Layer) ---
+# --- 4. ENGINE LOGIC ---
+now = get_uae_now()
+curr_time_hm = now.strftime("%H:%M")
 
-def calculate_priority(task):
-    """Rule-based reordering logic"""
-    score = 0
-    weights = {"Work": 40, "Study": 30, "Health": 20, "Personal": 10}
-    score += weights.get(task['cat'], 0)
-    # Check if task is within the next hour
-    try:
-        t_hour = int(task['time'].split(":")[0])
-        if t_hour == datetime.now().hour: score += 50
-    except: pass
-    return score
+def get_smart_suggestions():
+    """AI logic to suggest health and focus reminders."""
+    suggestions = []
+    if st.session_state.water_ml < 1500:
+        suggestions.append({"title": "Hydration Hit", "desc": "Drink 250ml to stay focused.", "cat": "Health"})
+    # Afternoon energy slump check (UAE Time)
+    if 13 <= now.hour <= 16:
+        suggestions.append({"title": "Post-Lunch Walk", "desc": "Quick 5-min walk for energy.", "cat": "Health"})
+    suggestions.append({"title": "20/20/20 Rule", "desc": "Rest your eyes from the screen.", "cat": "Personal"})
+    return suggestions
 
-def get_proactive_suggestions():
-    """Generates AI suggestions based on session data"""
-    suggs = []
-    # Suggest Eye Rest every 20 mins of session time
-    session_mins = (datetime.now() - st.session_state.start_time).seconds / 60
-    if session_mins > 20:
-        suggs.append({"title": "Eye Rest (20/20/20)", "desc": "Look away for 20s", "cat": "Health"})
-    
-    # Suggest hydration if goal is low
-    if st.session_state.water_ml < 1000:
-        suggs.append({"title": "Hydration Hit", "desc": "Drink 250ml now", "cat": "Health"})
-    return suggs
-
-# --- 4. TOP HEADER & CLOCK ---
-now = datetime.now()
-curr_str = now.strftime("%H:%M")
-
+# --- 5. TOP BAR & CLOCK ---
 c_title, c_clock = st.columns([4, 1])
 with c_title:
-    st.title(f"Good afternoon! 👋")
-    st.caption(f"Today is {now.strftime('%A, %B %d')}")
+    st.title("Good afternoon! 👋")
+    st.caption(f"UAE Standard Time | {now.strftime('%A, %b %d, %Y')}")
 with c_clock:
-    st.markdown(f'<div class="metric-card" style="padding:10px; text-align:center;"><b>{curr_str}</b></div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="metric-card"><b>{now.strftime("%H:%M:%S")}</b></div>', unsafe_allow_html=True)
 
-# --- 5. MAIN METRICS ---
+# --- 6. DASHBOARD METRICS ---
 m1, m2, m3, m4 = st.columns(4)
-done_count = len([t for t in st.session_state.tasks if t['status'] == 'Done'])
+done_tasks = len([t for t in st.session_state.tasks if t.get('status') == 'Done'])
 
-with m1:
-    st.markdown(f'<div class="metric-card"><span class="metric-title">✅ Tasks Done</span><div class="metric-value">{done_count}</div></div>', unsafe_allow_html=True)
-with m2:
-    st.markdown(f'<div class="metric-card"><span class="metric-title">💧 Water Intake</span><div class="metric-value">{st.session_state.water_ml}ml</div></div>', unsafe_allow_html=True)
-with m3:
-    st.markdown('<div class="metric-card"><span class="metric-title">⏱️ Session Focus</span><div class="metric-value">42m</div></div>', unsafe_allow_html=True)
-with m4:
-    st.markdown('<div class="metric-card"><span class="metric-title">🔥 Streak</span><div class="metric-value">5 Days</div></div>', unsafe_allow_html=True)
+with m1: st.markdown(f'<div class="metric-card"><span>Tasks Done</span><h3>{done_tasks}</h3></div>', unsafe_allow_html=True)
+with m2: st.markdown(f'<div class="metric-card"><span>Water Log</span><h3>{st.session_state.water_ml}ml</h3></div>', unsafe_allow_html=True)
+with m3: st.markdown('<div class="metric-card"><span>Focus Time</span><h3>2.4h</h3></div>', unsafe_allow_html=True)
+with m4: st.markdown('<div class="metric-card"><span>Streak</span><h3>12</h3></div>', unsafe_allow_html=True)
 
-# --- 6. SMART SUGGESTIONS ---
+# --- 7. SMART AI SUGGESTIONS ---
 st.markdown("### ✨ Smart Suggestions")
-for s in get_proactive_suggestions():
-    with st.container():
-        sc1, sc2 = st.columns([5, 1])
-        sc1.markdown(f"""
-            <div class="suggestion-box">
-                <div><strong>{s['title']}</strong> <span class="badge-ai">AI</span><br><small>{s['desc']}</small></div>
-            </div>
+for s in get_smart_suggestions():
+    col_s1, col_s2 = st.columns([5, 1])
+    col_s1.markdown(f"""
+        <div class="suggestion-box">
+            <strong>{s['title']}</strong> <span class="badge-ai">AI</span><br>
+            <small>{s['desc']}</small>
+        </div>
         """, unsafe_allow_html=True)
-        if sc2.button("Add", key=s['title']):
-            st.session_state.tasks.append({"name": s['title'], "cat": s['cat'], "status": "Pending", "time": curr_str})
-            st.rerun()
-
-# --- 7. TASK QUEUE (AI ORDERED) ---
-st.markdown("### 📋 Scheduled Reminders")
-sorted_tasks = sorted(st.session_state.tasks, key=calculate_priority, reverse=True)
-
-if not sorted_tasks:
-    st.info("No reminders yet. Add one below!")
-else:
-    for i, t in enumerate(sorted_tasks):
-        if t['status'] == "Pending":
-            with st.container():
-                tc1, tc2 = st.columns([5, 1])
-                tc1.markdown(f"""
-                    <div class="task-item">
-                        <div><b>{t['time']}</b> - {t['name']} <small>({t['cat']})</small></div>
-                    </div>
-                """, unsafe_allow_html=True)
-                if tc2.button("Done", key=f"done_{i}"):
-                    # Find original task in list and mark done
-                    for task in st.session_state.tasks:
-                        if task['name'] == t['name']: task['status'] = "Done"
-                    st.rerun()
-
-# --- 8. ADD NEW & HYDRATION ---
-st.markdown("---")
-with st.expander("➕ Set New Timed Reminder"):
-    c_a, c_b, c_c = st.columns(3)
-    new_name = c_a.text_input("What's the event?")
-    new_time = c_b.text_input("Time (HH:MM)", value=curr_str)
-    new_cat = c_c.selectbox("Category", ["Work", "Study", "Health", "Personal"])
-    if st.button("Schedule Now"):
-        st.session_state.tasks.append({"name": new_name, "cat": new_cat, "status": "Pending", "time": new_time})
+    if col_s2.button("Add", key=s['title']):
+        st.session_state.tasks.append({"name": s['title'], "cat": s['cat'], "time": curr_time_hm, "status": "Pending"})
         st.rerun()
 
-# --- 9. AUTOMATIC NOTIFICATION CHECKER ---
-# Check if 30 mins passed for water
-time_passed = (now - st.session_state.last_water_time).seconds / 60
-if time_passed >= 30:
-    st.toast("💧 Time to hydrate! Logging 250ml...", icon="🥛")
+# --- 8. REMINDERS & SCHEDULING ---
+st.markdown("---")
+st.subheader("📋 Scheduled Reminders")
+
+if not st.session_state.tasks:
+    st.info("No reminders set yet. Use the expander below or AI suggestions!")
+
+# Display Tasks
+for i, t in enumerate(st.session_state.tasks):
+    if t['status'] == 'Pending':
+        col_t1, col_t2 = st.columns([5, 1])
+        col_t1.info(f"**{t['time']}** — {t['name']} ({t['cat']})")
+        if col_t2.button("Done", key=f"d_{i}"):
+            t['status'] = 'Done'
+            st.rerun()
+
+# Add New Reminder
+with st.expander("➕ Set New Manual Reminder"):
+    ca, cb, cc = st.columns(3)
+    r_name = ca.text_input("Reminder Name")
+    r_time = cb.text_input("Time (HH:MM)", value=curr_time_hm)
+    r_cat = cc.selectbox("Category", ["Work", "Study", "Health", "Personal"])
+    if st.button("Schedule Alert"):
+        st.session_state.tasks.append({"name": r_name, "cat": r_cat, "time": r_time, "status": "Pending"})
+        st.rerun()
+
+# --- 9. ANALYTICS ---
+st.markdown("---")
+st.subheader("📈 Performance Analysis")
+df_week = pd.DataFrame({'Day': ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'], 'Tasks': [5, 4, 7, 2, 5, 8, 3]})
+fig = px.bar(df_week, x='Day', y='Tasks', color_discrete_sequence=['#A7F3D0'])
+# Fixed width parameter for Streamlit 2026
+st.plotly_chart(fig, width='stretch')
+
+# --- 10. NOTIFICATION ENGINE (LIVE) ---
+# Water Timer: Uses total_seconds() to compare aware datetimes
+time_diff = now - st.session_state.last_water_check
+if time_diff.total_seconds() / 60 >= 30:
+    st.toast("💧 UAE Health: Time to drink water!", icon="🥛")
     st.session_state.water_ml += 250
-    st.session_state.last_water_time = now
+    st.session_state.last_water_check = now
 
-# Check for timed tasks
+# Scheduled Alerts
 for t in st.session_state.tasks:
-    if t['status'] == "Pending" and t['time'] == curr_str:
-        st.toast(f"⏰ REMINDER: {t['name']} is starting!", icon="🔔")
+    if t['status'] == "Pending" and t['time'] == curr_time_hm:
+        notif_id = f"{t['name']}_{curr_time_hm}"
+        if notif_id not in st.session_state.notified_cache:
+            st.toast(f"⏰ REMINDER: {t['name']} is starting now!", icon="🔔")
+            st.session_state.notified_cache.add(notif_id)
 
-# --- 10. AUTO-REFRESH SCRIPT ---
+# The Heartbeat: Reruns the script to update clock and check times
 time.sleep(1)
-if now.second == 0:
-    st.rerun()
+st.rerun()
