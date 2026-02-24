@@ -1,142 +1,221 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
-from datetime import datetime
-import pytz
+import matplotlib.pyplot as plt
 import time
+import threading
+import datetime
+import json
+import os
+import google.generativeai as genai
+from plyer import notification
 
-# --- 1. GLOBAL SYNC & CONFIG ---
-st.set_page_config(page_title="AuraFlow | Progress Tracker", page_icon="📈", layout="wide")
+# --- 1. CORE AI & LOGIC ENGINE ---
+class FocusFlowEngine:
+    def __init__(self):
+        self.data_file = "focus_flow_data.json"
+        self.api_key = None
+        self.load_data()
 
-def get_uae_now():
-    return datetime.now(pytz.timezone('Asia/Dubai'))
+    def load_data(self):
+        if os.path.exists(self.data_file):
+            try:
+                with open(self.data_file, 'r') as f:
+                    self.data = json.load(f)
+            except:
+                self.initialize_default_data()
+        else:
+            self.initialize_default_data()
 
-# --- 2. DATA INITIALIZATION ---
-if 'data' not in st.session_state:
-    st.session_state.data = [] # Single source of truth for all tasks/deadlines
-if 'water_ml' not in st.session_state:
-    st.session_state.water_ml = 0
-if 'last_water_check' not in st.session_state:
-    st.session_state.last_water_check = get_uae_now()
-if 'notified_cache' not in st.session_state:
-    st.session_state.notified_cache = set()
+    def initialize_default_data(self):
+        self.data = {
+            "study_plans": [],
+            "work_tasks": [],
+            "health": {"water": 0, "exercise": False, "sleep": 8},
+            "stats": {"completed": 0, "missed": 0, "daily_history": []}
+        }
+        self.save_data()
 
-# --- 3. UI STYLING ---
-st.markdown("""
-    <style>
-    .stApp { background-color: #F8F9FB; }
-    .status-done { text-decoration: line-through; color: #94A3B8; }
-    .metric-card {
-        background: white; padding: 20px; border-radius: 15px;
-        box-shadow: 0 4px 10px rgba(0,0,0,0.03); text-align: center;
-        border: 1px solid #F0F2F6;
-    }
-    </style>
-    """, unsafe_allow_html=True)
+    def save_data(self):
+        with open(self.data_file, 'w') as f:
+            json.dump(self.data, f)
 
-# --- 4. ENGINE LOGIC ---
-now = get_uae_now()
-curr_time_hm = now.strftime("%H:%M")
+    def configure_gemini(self, key):
+        self.api_key = key
+        genai.configure(api_key=key)
 
-# --- 5. TOP HEADER & MAIN METRICS ---
-st.title("AuraFlow: Multi-Track Dashboard 🇦🇪")
-st.caption(f"Real-time tracking: {now.strftime('%H:%M:%S')}")
-
-m1, m2, m3, m4 = st.columns(4)
-study_tasks = [t for t in st.session_state.data if t['track'] == "Study"]
-work_tasks = [t for t in st.session_state.data if t['track'] == "Work"]
-
-with m1:
-    prog = len([t for t in study_tasks if t['status'] == "Done"]) / len(study_tasks) * 100 if study_tasks else 0
-    st.markdown(f'<div class="metric-card"><span>📚 Study Progress</span><h3>{prog:.0f}%</h3></div>', unsafe_allow_html=True)
-with m2:
-    prog_w = len([t for t in work_tasks if t['status'] == "Done"]) / len(work_tasks) * 100 if work_tasks else 0
-    st.markdown(f'<div class="metric-card"><span>💼 Work Progress</span><h3>{prog_w:.0f}%</h3></div>', unsafe_allow_html=True)
-with m3:
-    st.markdown(f'<div class="metric-card"><span>💧 Water Intake</span><h3>{st.session_state.water_ml}ml</h3></div>', unsafe_allow_html=True)
-with m4:
-    st.markdown(f'<div class="metric-card"><span>🔥 Health Score</span><h3>85/100</h3></div>', unsafe_allow_html=True)
-
-# --- 6. DATA INPUT ---
-with st.expander("➕ Add New Task / Deadline / Meeting"):
-    c1, c2, c3, c4 = st.columns([2, 1, 1, 1])
-    name = c1.text_input("Title")
-    track = c2.selectbox("Track", ["Study", "Work", "Health"])
-    t_type = c3.selectbox("Type", ["Exam", "Project", "Meeting", "Exercise"])
-    t_time = c4.text_input("Time (HH:MM)", value=curr_time_hm)
-    
-    if st.button("Log into AuraFlow"):
-        st.session_state.data.append({
-            "name": name, "track": track, "type": t_type, 
-            "time": t_time, "status": "Pending", "created": now.date()
-        })
-        st.rerun()
-
-# --- 7. TRACKING DASHBOARDS ---
-tab1, tab2, tab3 = st.tabs(["📋 Task Manager", "📈 Progress Analytics", "✨ AI Health Suggestions"])
-
-with tab1:
-    col_study, col_work = st.columns(2)
-    
-    with col_study:
-        st.subheader("📚 Study Track")
-        for i, t in enumerate(st.session_state.data):
-            if t['track'] == "Study" and t['status'] == "Pending":
-                c_a, c_b = st.columns([4, 1])
-                c_a.info(f"**{t['time']}** — {t['name']} ({t['type']})")
-                if c_b.button("Done", key=f"s_{i}"):
-                    t['status'] = "Done"
-                    st.rerun()
-
-    with col_work:
-        st.subheader("💼 Work Track")
-        for i, t in enumerate(st.session_state.data):
-            if t['track'] == "Work" and t['status'] == "Pending":
-                c_a, c_b = st.columns([4, 1])
-                c_a.success(f"**{t['time']}** — {t['name']} ({t['type']})")
-                if c_b.button("Done", key=f"w_{i}"):
-                    t['status'] = "Done"
-                    st.rerun()
-
-with tab2:
-    st.subheader("Analytics Overview")
-    if st.session_state.data:
-        df = pd.DataFrame(st.session_state.data)
+    def get_gemini_advice(self, prompt_type, context):
+        """Generative AI Layer for Smart Feedback"""
+        if not self.api_key:
+            return "Enter a Gemini API Key in the sidebar for AI insights!"
         
-        # Performance Chart
-        fig = px.bar(df, x="track", color="status", 
-                     title="Completion Rates by Category",
-                     color_discrete_map={"Done": "#10B981", "Pending": "#E2E8F0"},
-                     barmode="group")
-        st.plotly_chart(fig, width="stretch")
+        try:
+            model = genai.GenerativeModel('gemini-1.5-flash')
+            full_prompt = f"Context: {context}. Task: {prompt_type}. Keep it concise and encouraging."
+            response = model.generate_content(full_prompt)
+            return response.text
+        except Exception as e:
+            return f"AI logic paused: {str(e)}"
+
+    def calculate_study_logic(self, topics, days, hours):
+        """Rule-based scheduling with burnout prevention"""
+        if days <= 0: return []
         
-        # Activity History
-        fig2 = px.pie(df, names="type", title="Focus Distribution", hole=0.4)
-        st.plotly_chart(fig2, width="stretch")
+        # Burnout Prevention: Limit workload if hours > 8
+        intensity = "High" if hours > 6 else "Balanced"
+        topics_per_day = -(-len(topics) // days) # Ceiling division
+        
+        plan = []
+        for i in range(days):
+            day_topics = topics[i*topics_per_day : (i+1)*topics_per_day]
+            if not day_topics: break
+            plan.append({
+                "Date": str(datetime.date.today() + datetime.timedelta(days=i)),
+                "Topics": ", ".join(day_topics),
+                "Routine": "60m Study / 20m Break",
+                "Reminders": "Water every 10m"
+            })
+        return plan
 
-with tab3:
-    st.subheader("AI Wellness Insights")
-    if len(work_tasks) > 3:
-        st.warning("⚠️ **High Workload Detected:** AI suggests a 10-minute 'Screen-Off' break after your next meeting.")
-    if st.session_state.water_ml < 1000:
-        st.error("⚠️ **Hydration Low:** Your focus may drop. Drink 500ml of water immediately.")
-    st.info("💡 **Study Tip:** You have an exam prep session coming up. Review your hardest module first while energy is high.")
+# --- 2. BACKGROUND NOTIFIER THREAD ---
+def background_notifier():
+    """Independent thread for system notifications"""
+    # Note: Streamlit's architecture re-runs the script on interaction. 
+    # We use a global check to ensure this thread only starts once.
+    count = 0
+    while True:
+        # Every 10 minutes (600 seconds)
+        time.sleep(600)
+        notification.notify(
+            title="💧 FocusFlow: Hydration",
+            message="10 minutes passed! Take a sip of water.",
+            timeout=5
+        )
+        count += 1
+        # Every 3 hours (18 * 10 mins)
+        if count % 18 == 0:
+            notification.notify(
+                title="🧘 FocusFlow: Movement",
+                message="3 hours of work reached. Stretch for 5 minutes!",
+                timeout=10
+            )
 
-# --- 8. LIVE NOTIFICATIONS & WATER ---
-# 30-min Health Cycle
-if (now - st.session_state.last_water_check).total_seconds() / 60 >= 30:
-    st.toast("💧 Hydration & Movement Check!", icon="🧘")
-    st.session_state.water_ml += 250
-    st.session_state.last_water_check = now
+# --- 3. STREAMLIT UI SETUP ---
+st.set_page_config(page_title="FocusFlow AI", page_icon="🚀", layout="wide")
 
-# Scheduled Alerts
-for t in st.session_state.data:
-    if t['status'] == "Pending" and t['time'] == curr_time_hm:
-        nid = f"{t['name']}_{curr_time_hm}"
-        if nid not in st.session_state.notified_cache:
-            st.toast(f"🔔 STARTING NOW: {t['name']}", icon="⏰")
-            st.session_state.notified_cache.add(nid)
+if 'engine' not in st.session_state:
+    st.session_state.engine = FocusFlowEngine()
 
-# Heartbeat
-time.sleep(1)
-st.rerun()
+if 'notifier_started' not in st.session_state:
+    threading.Thread(target=background_notifier, daemon=True).start()
+    st.session_state.notifier_started = True
+
+# --- SIDEBAR ---
+st.sidebar.title("🚀 FocusFlow AI")
+st.sidebar.markdown("---")
+menu = st.sidebar.selectbox("Dashboard", ["Study Orchestrator", "Work Engine", "Health Hub", "Analytics"])
+api_key = st.sidebar.text_input("Gemini API Key", type="password", help="Get your key at aistudio.google.com")
+
+if api_key:
+    st.session_state.engine.configure_gemini(api_key)
+
+# --- SECTION 1: STUDY ---
+if menu == "Study Orchestrator":
+    st.header("📚 AI Study Orchestrator")
+    
+    with st.container(border=True):
+        c1, c2 = st.columns(2)
+        with c1:
+            mod_name = st.text_input("Module Name", placeholder="e.g. Data Science")
+            exam_date = st.date_input("Exam/Deadline Date")
+            daily_hours = st.slider("Daily Study Hours", 1, 12, 4)
+        with c2:
+            topics_input = st.text_area("List Topics (comma-separated)", placeholder="Topic 1, Topic 2, ...")
+    
+    if st.button("Generate Smart Timetable"):
+        topics = [t.strip() for t in topics_input.split(",") if t.strip()]
+        days_rem = (exam_date - datetime.date.today()).days
+        
+        if not topics or days_rem <= 0:
+            st.error("Please enter topics and a future date.")
+        else:
+            plan = st.session_state.engine.calculate_study_logic(topics, days_rem, daily_hours)
+            st.session_state.engine.data['study_plans'] = plan
+            st.session_state.engine.save_data()
+            
+            # AI Insight
+            with st.spinner("AI Analysis..."):
+                advice = st.session_state.engine.get_gemini_advice(
+                    "Break down these topics for a student and suggest a logical order", topics_input
+                )
+                st.info(f"🧠 AI Breakdown Assistant:\n{advice}")
+
+    if st.session_state.engine.data['study_plans']:
+        st.subheader("Current Timetable")
+        st.table(pd.DataFrame(st.session_state.engine.data['study_plans']))
+
+# --- SECTION 2: WORK ---
+elif menu == "Work Engine":
+    st.header("💼 Work & Focus Block Engine")
+    
+    with st.form("task_form"):
+        t_name = st.text_input("Task Description")
+        t_pri = st.select_slider("Priority", options=["Low", "Medium", "High"])
+        if st.form_submit_button("Add to Focus Block"):
+            st.session_state.engine.data['work_tasks'].append({"task": t_name, "priority": t_pri, "done": False})
+            st.session_state.engine.save_data()
+            st.rerun()
+
+    st.subheader("Focus Queue")
+    for i, t in enumerate(st.session_state.engine.data['work_tasks']):
+        col_t, col_b = st.columns([4, 1])
+        col_t.write(f"**[{t['priority']}]** {t['task']}")
+        if col_b.button("Complete ✅", key=f"btn_{i}"):
+            st.session_state.engine.data['work_tasks'].pop(i)
+            st.session_state.engine.data['stats']['completed'] += 1
+            st.session_state.engine.save_data()
+            st.rerun()
+
+# --- SECTION 3: HEALTH ---
+elif menu == "Health Hub":
+    st.header("🌿 Health & Wellness Tracker")
+    h = st.session_state.engine.data['health']
+    
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.metric("Hydration Goal", f"{h['water']} / 10 Glasses")
+        if st.button("Drink Water 💧"):
+            h['water'] += 1
+            st.session_state.engine.save_data()
+            st.rerun()
+    with c2:
+        st.write("Daily Movement")
+        ex = st.toggle("Exercise Completed Today", value=h['exercise'])
+        h['exercise'] = ex
+        st.session_state.engine.save_data()
+    with c3:
+        sleep = st.number_input("Sleep Hours", 0, 15, h['sleep'])
+        h['sleep'] = sleep
+        st.session_state.engine.save_data()
+
+    if st.button("Get AI Wellness Feedback"):
+        context = f"Water: {h['water']}, Exercise: {h['exercise']}, Sleep: {h['sleep']}"
+        feedback = st.session_state.engine.get_gemini_advice("Provide health advice based on these daily stats", context)
+        st.success(feedback)
+
+# --- SECTION 4: ANALYTICS ---
+elif menu == "Analytics":
+    st.header("📊 Performance Dashboard")
+    stats = st.session_state.engine.data['stats']
+    
+    c1, c2 = st.columns(2)
+    with c1:
+        fig, ax = plt.subplots()
+        ax.bar(["Tasks Completed", "Tasks Pending"], [stats['completed'], len(st.session_state.engine.data['work_tasks'])], color=['#2ecc71', '#e74c3c'])
+        ax.set_title("Work Progress")
+        st.pyplot(fig)
+    
+    with c2:
+        # Wellness Gauge
+        score = (st.session_state.engine.data['health']['water'] * 5) + (30 if st.session_state.engine.data['health']['exercise'] else 0)
+        st.subheader(f"Current Wellness Score: {min(score, 100)}/100")
+        st.progress(min(score/100, 1.0))
