@@ -3,140 +3,165 @@ import pandas as pd
 import plotly.express as px
 import google.generativeai as genai
 from datetime import datetime, timedelta
-import time
 
-# --- 1. SETTINGS & STYLING ---
-st.set_page_config(page_title="AuraFlow: Adaptive Intelligence", page_icon="🧠", layout="wide")
+# --- 1. CONFIG & MODERN STYLING ---
+st.set_page_config(page_title="MindFlow | Adaptive Intelligence", page_icon="✨", layout="wide")
 
-# Advanced CSS for Gamification & Categorized Alerts
 st.markdown("""
     <style>
-    .badge { background: linear-gradient(45deg, #FFD700, #FFA500); color: black; padding: 5px 15px; border-radius: 20px; font-weight: bold; margin-right: 5px; }
-    .work-tag { border-left: 5px solid #4facfe; padding-left: 10px; }
-    .health-tag { border-left: 5px solid #00ffa3; padding-left: 10px; }
-    .meeting-tag { border-left: 5px solid #f093fb; padding-left: 10px; }
-    .stProgress > div > div > div > div { background-image: linear-gradient(to right, #4facfe , #00ffa3); }
+    /* Global Background */
+    .stApp { background-color: #F8F9FB; }
+    
+    /* MindFlow Card Design */
+    .metric-card {
+        background-color: white;
+        padding: 24px;
+        border-radius: 20px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.03);
+        border: 1px solid #F0F2F6;
+        margin-bottom: 20px;
+    }
+    .metric-title { color: #5F6368; font-size: 14px; font-weight: 500; }
+    .metric-value { color: #1A1C1E; font-size: 32px; font-weight: 700; margin-top: 8px; }
+    
+    /* Smart Suggestion Styling */
+    .suggestion-card {
+        background-color: #FDF4FF;
+        padding: 16px;
+        border-radius: 12px;
+        border: 1px solid #FAE8FF;
+        margin-bottom: 12px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+    
+    /* Priority Badges */
+    .badge-high { background: #FEE2E2; color: #EF4444; padding: 2px 8px; border-radius: 6px; font-size: 11px; font-weight: bold; }
+    .badge-ai { background: #F3E8FF; color: #7E22CE; padding: 2px 8px; border-radius: 6px; font-size: 11px; font-weight: bold; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. ADVANCED SESSION STATE (Memory & Habit Tracking) ---
+# --- 2. DATA INITIALIZATION ---
 if 'tasks' not in st.session_state:
     st.session_state.tasks = []
-if 'stats' not in st.session_state:
-    st.session_state.stats = {"Work": 0, "Health": 0, "Meeting": 0, "streak": 0}
-if 'start_session' not in st.session_state:
-    st.session_state.start_session = datetime.now()
-if 'badges' not in st.session_state:
-    st.session_state.badges = []
+if 'water' not in st.session_state:
+    st.session_state.water = 0 # in ml
+if 'history' not in st.session_state:
+    # Mock history for the weekly dashboard
+    st.session_state.history = pd.DataFrame({
+        'Day': ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
+        'Completed': [5, 3, 6, 2, 4, 7, 0]
+    })
 
-# --- 3. THE INTELLIGENCE ENGINE ---
-
-def trigger_alert(title, msg, sound=True):
-    """Triggers Desktop Notification and optional Audio via JS"""
-    js = f"""<script>
-    if (Notification.permission === 'granted') {{
-        new Notification("{title}", {{body: "{msg}"}});
-        { 'var audio = new Audio("https://actions.google.com/sounds/v1/alarms/beep_short.ogg"); audio.play();' if sound else '' }
-    }} else {{ Notification.requestPermission(); }}
-    </script>"""
-    st.components.v1.html(js, height=0)
-
-def get_ai_motivation(task_name):
-    """Requirement 5: Smart Motivational Popups"""
-    try:
-        genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        prompt = f"Give a 1-sentence badass motivational push for the task: {task_name}"
-        return model.generate_content(prompt).text
-    except:
-        return "You've got this! Focus on the finish line."
-
-# --- 4. SIDEBAR: HABIT MONITORING ---
-with st.sidebar:
-    st.title("🌊 AuraFlow")
-    st.write("### 🧠 Proactive Brain Monitor")
+# --- 3. SMART SUGGESTION ENGINE ---
+def get_smart_suggestions():
+    suggestions = []
+    now = datetime.now()
     
-    # Logic for Requirement 1: Proactive Suggestions
-    work_duration = datetime.now() - st.session_state.start_session
-    minutes_worked = work_duration.seconds // 60
+    # 1. Screen Time Logic
+    suggestions.append({"title": "Eye Rest (20/20/20)", "desc": "Look 20 feet away for 20 seconds", "type": "Health", "ai": True})
     
-    if minutes_worked > 120:
-        st.error("⚠️ Overload detected! You've worked for 2 hours. AI suggests a 15-min break.")
-        if st.button("Start AI-Suggested Break"):
-            trigger_alert("Proactive Health Alert", "2 Hours reached. Step away from the screen.")
-    else:
-        st.info(f"Session focus: {minutes_worked} minutes. You are in optimal flow.")
+    # 2. Dehydration Logic
+    if st.session_state.water < 1500:
+        suggestions.append({"title": "Hydration Hit", "desc": "You are 500ml behind your daily goal", "type": "Health", "ai": True})
+        
+    # 3. Work/Study Balance
+    work_tasks = [t for t in st.session_state.tasks if t['cat'] in ['Work', 'Study'] and t['status'] == 'Pending']
+    if len(work_tasks) > 3:
+        suggestions.append({"title": "Brief Stretch", "desc": "High workload detected. Stretch for 2 mins", "type": "Personal", "ai": True})
+        
+    return suggestions
 
-    st.markdown("---")
-    if st.button("🔔 Enable System Sound & Alerts"):
-        st.components.v1.html("<script>Notification.requestPermission();</script>", height=0)
+# --- 4. MAIN LAYOUT: TOP BAR ---
+col_head, col_btn = st.columns([4, 1])
+with col_head:
+    st.title("Good afternoon! 👋")
+    st.caption("Here's your productivity overview")
+with col_btn:
+    if st.button("➕ New Reminder", use_container_width=True):
+        st.toast("Feature coming soon!")
 
-# --- 5. MAIN UI ---
-tabs = st.tabs(["🎯 Productivity Center", "📈 Performance Dashboard", "🏆 Rewards"])
+# --- 5. METRIC GRID ---
+m1, m2, m3, m4 = st.columns(4)
 
-# TAB 1: CATEGORIZED ALERTS & SCHEDULING
-with tabs[0]:
-    c1, c2 = st.columns(2)
-    with c1:
-        st.subheader("Add Categorized Alert")
-        with st.form("task_form", clear_on_submit=True):
-            t_name = st.text_input("Task/Event Name")
-            t_cat = st.selectbox("Category", ["Work", "Health", "Meeting", "Personal"])
-            t_type = st.radio("Frequency", ["One-time", "Recurring (Hourly)", "Recurring (Daily)"])
-            if st.form_submit_button("Add to Engine"):
-                st.session_state.tasks.append({"name": t_name, "cat": t_cat, "freq": t_type, "status": "Pending", "created": datetime.now()})
+completed_count = len([t for t in st.session_state.tasks if t['status'] == 'Done'])
+with m1:
+    st.markdown(f'<div class="metric-card"><span class="metric-title">✅ Tasks Done</span><div class="metric-value">{completed_count}</div></div>', unsafe_allow_html=True)
+with m2:
+    water_pct = min(int((st.session_state.water / 2000) * 100), 100)
+    st.markdown(f'<div class="metric-card"><span class="metric-title">💧 Water Intake</span><div class="metric-value">{st.session_state.water}ml</div><small>{water_pct}% of goal</small></div>', unsafe_allow_html=True)
+with m3:
+    st.markdown('<div class="metric-card"><span class="metric-title">⏱️ Focus Time</span><div class="metric-value">2h 15m</div></div>', unsafe_allow_html=True)
+with m4:
+    st.markdown('<div class="metric-card"><span class="metric-title">🔥 Streak</span><div class="metric-value">12 Days</div></div>', unsafe_allow_html=True)
+
+# --- 6. SMART SUGGESTIONS AREA ---
+st.markdown("### ✨ Smart Suggestions")
+for sugg in get_smart_suggestions():
+    with st.container():
+        c_a, c_b = st.columns([4, 1])
+        with c_a:
+            st.markdown(f"""
+                <div class="suggestion-card">
+                    <div>
+                        <strong>{sugg['title']}</strong> <span class="badge-ai">✨ AI</span><br>
+                        <small>{sugg['desc']}</small>
+                    </div>
+                </div>
+            """, unsafe_allow_html=True)
+        with c_b:
+            if st.button("Add", key=sugg['title']):
+                st.session_state.tasks.append({"name": sugg['title'], "cat": sugg['type'], "status": "Pending", "time": "Now"})
                 st.rerun()
 
-    with c2:
-        st.subheader("Live Notification Queue")
-        for i, t in enumerate(st.session_state.tasks):
-            if t['status'] == "Pending":
-                # Color coding based on Category (Requirement 2)
-                tag_class = f"{t['cat'].lower()}-tag"
-                st.markdown(f'<div class="{tag_class}"><b>{t["cat"]}</b>: {t["name"]} ({t["freq"]})</div>', unsafe_allow_html=True)
-                
-                b1, b2 = st.columns(2)
-                if b1.button("✅ Complete", key=f"done{i}"):
-                    st.session_state.tasks[i]['status'] = "Done"
-                    st.session_state.stats[t['cat']] += 1
-                    st.session_state.stats["streak"] += 1
-                    # Requirement 6: Gamification Check
-                    if st.session_state.stats["streak"] % 3 == 0:
-                        st.session_state.badges.append(f"🔥 {st.session_state.stats['streak']} Streak")
-                    st.balloons()
+# --- 7. TASK MANAGER ---
+st.markdown("### 📋 Daily Tasks")
+cat_filter = st.tabs(["All", "💼 Work", "📚 Study", "🏥 Health", "👤 Personal"])
+
+# Mock input for demo
+with st.expander("➕ Quick Add Task"):
+    t_name = st.text_input("Task name")
+    t_cat = st.selectbox("Category", ["Work", "Study", "Health", "Personal"])
+    if st.button("Create Task"):
+        st.session_state.tasks.append({"name": t_name, "cat": t_cat, "status": "Pending", "time": "Today"})
+        st.rerun()
+
+# Task List Display
+if not st.session_state.tasks:
+    st.info("No tasks yet. Use the Smart Suggestions or Quick Add!")
+else:
+    for i, task in enumerate(st.session_state.tasks):
+        with st.container():
+            t_col1, t_col2 = st.columns([5, 1])
+            t_col1.write(f"**{task['name']}** ({task['cat']})")
+            if task['status'] == 'Pending':
+                if t_col2.button("Done", key=f"btn_{i}"):
+                    st.session_state.tasks[i]['status'] = 'Done'
                     st.rerun()
-                if b2.button("💡 Get Motivation", key=f"mot{i}"):
-                    st.warning(get_ai_motivation(t['name']))
+            else:
+                t_col2.write("✅")
 
-# TAB 2: VISUAL DASHBOARD (Requirement 3)
-with tabs[1]:
-    st.subheader("Visual Performance Tracking")
-    m1, m2, m3 = st.columns(3)
-    m1.metric("Tasks Completed", st.session_state.stats["Work"] + st.session_state.stats["Meeting"])
-    m2.metric("Health Milestones", st.session_state.stats["Health"])
-    m3.metric("Current Streak", f"{st.session_state.stats['streak']} Tasks")
+# --- 8. ANALYSIS DASHBOARD ---
+st.markdown("---")
+st.markdown("### 📈 Analytics Dashboard")
+tab_week, tab_month = st.tabs(["Weekly Progress", "Monthly Analysis"])
 
-    # Interactive Dashboard Chart
-    df = pd.DataFrame([
-        {"Category": "Work", "Completed": st.session_state.stats["Work"]},
-        {"Category": "Health", "Completed": st.session_state.stats["Health"]},
-        {"Category": "Meeting", "Completed": st.session_state.stats["Meeting"]}
-    ])
-    fig = px.bar(df, x="Category", y="Completed", color="Category", title="Weekly Habit Distribution")
+with tab_week:
+    fig = px.bar(st.session_state.history, x='Day', y='Completed', 
+                 title="Tasks Completed this Week",
+                 color_discrete_sequence=['#A7F3D0'])
+    fig.update_layout(plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', yaxis_showgrid=False)
     st.plotly_chart(fig, use_container_width=True)
 
-# TAB 3: REWARDS & CALENDAR (Requirement 6 & 7)
-with tabs[2]:
-    st.subheader("Achievement Vault")
-    if not st.session_state.badges:
-        st.write("No badges yet. Complete 3 tasks to unlock your first streak badge!")
-    else:
-        for b in st.session_state.badges:
-            st.markdown(f'<span class="badge">{b}</span>', unsafe_allow_html=True)
+with tab_month:
+    st.write("#### AI Monthly Insights")
+    st.info("AI Analysis: You are 15% more productive on Tuesday mornings. Consider scheduling your deep work then.")
     
-    st.markdown("---")
-    st.subheader("🗓️ Calendar Integration (Mock Mode)")
-    st.write("Calendar Sync Active: Auto-imported 2 events from G-Calendar.")
-    if st.button("Simulate Auto-Import"):
-        st.session_state.tasks.append({"name": "Team Standup", "cat": "Meeting", "freq": "One-time", "status": "Pending"})
-        st.rerun()
+# --- 9. HYDRATION QUICK ACTION ---
+st.sidebar.markdown("### 💧 Hydration Tracker")
+add_water = st.sidebar.select_slider("Add water (ml)", options=[250, 500, 750])
+if st.sidebar.button("Log Water"):
+    st.session_state.water += add_water
+    st.sidebar.success(f"Added {add_water}ml!")
+    st.rerun()
