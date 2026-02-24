@@ -11,7 +11,7 @@ import pytz
 # 1. PAGE CONFIG
 # ==========================================================
 st.set_page_config(
-    page_title="MindFlow | Adaptive Intelligence", 
+    page_title="MindFlow | AI Assistant", 
     page_icon="✨", 
     layout="wide"
 )
@@ -20,17 +20,27 @@ def get_uae_now():
     return datetime.now(pytz.timezone('Asia/Dubai'))
 
 # ==========================================================
-# 2. AI CONFIGURATION (Safe Handling)
+# 2. AI CONFIGURATION (Multi-Model Fallback)
 # ==========================================================
-if "GEMINI_API_KEY" in st.secrets:
-    try:
-        genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-        # Switched to 'gemini-1.5-flash' for better availability
-        model = genai.GenerativeModel("gemini-1.5-flash")
-    except Exception as e:
-        st.error(f"AI Configuration Error: {e}")
-else:
-    st.error("Missing GEMINI_API_KEY in Streamlit Secrets.")
+def get_ai_response(prompt):
+    """Attempts to get a response using multiple model aliases to avoid 404s."""
+    if "GEMINI_API_KEY" not in st.secrets:
+        return "API Key missing in secrets."
+    
+    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+    
+    # List of models to try in order of stability
+    model_names = ["gemini-1.5-flash", "gemini-pro", "models/gemini-1.5-flash"]
+    
+    for name in model_names:
+        try:
+            model = genai.GenerativeModel(name)
+            response = model.generate_content(prompt)
+            return response.text
+        except Exception:
+            continue # Try the next model in the list
+            
+    return "AI is temporarily unavailable. Please check your Google AI Studio quota."
 
 # ==========================================================
 # 3. STATE INITIALIZATION
@@ -41,7 +51,7 @@ if "study_plan" not in st.session_state: st.session_state.study_plan = {}
 if "last_check" not in st.session_state: st.session_state.last_check = get_uae_now()
 
 # ==========================================================
-# 4. NAVIGATION
+# 4. NAVIGATION & TIME
 # ==========================================================
 now = get_uae_now()
 st.sidebar.title("✨ MindFlow")
@@ -68,15 +78,10 @@ if section == "Home":
     
     st.subheader("🤖 Daily AI Strategy")
     if st.button("Generate Strategy"):
-        try:
-            with st.spinner("AI is analyzing your current flow..."):
-                ctx = f"Study: {mod}, Water: {st.session_state.water}ml, Pending Tasks: {pending}"
-                # The prompt that was causing the NotFound error
-                resp = model.generate_content(f"Give a short 3-sentence high-performance strategy for today: {ctx}")
-                st.info(resp.text)
-        except Exception as e:
-            st.warning("The AI is currently unavailable or the model name was not found. Please check your API quota or model name.")
-            st.error(f"Error Details: {e}")
+        with st.spinner("Consulting Gemini..."):
+            ctx = f"Study: {mod}, Water: {st.session_state.water}ml, Pending Tasks: {pending}"
+            strategy = get_ai_response(f"Give a short 3-sentence high-performance strategy for today: {ctx}")
+            st.info(strategy)
 
 # ==========================================================
 # 6. STUDY SECTION
@@ -126,7 +131,7 @@ elif section == "Work":
 elif section == "Health":
     st.header("🏥 Health Optimizer")
     st.markdown("### The 20-20-20 Rule")
-    st.write("To reduce eye strain: Every 20 minutes, look at something 20 feet away for 20 seconds.")
+    st.write("To prevent digital eye strain, follow this simple cycle:")
     
     
     
@@ -154,7 +159,6 @@ if st.sidebar.button("🥤 Log 250ml Water"):
     st.session_state.water += 250
     st.rerun()
 
-# Check every 30 minutes
 seconds_since_check = (now - st.session_state.last_check).total_seconds()
 if seconds_since_check >= 1800:
     st.toast("💧 Time to hydrate!", icon="🥤")
