@@ -87,7 +87,7 @@ with tabs[0]:
                 st.session_state.tasks.append({"name": t_name, "cat": t_cat, "freq": t_type, "status": "Pending", "created": datetime.now()})
                 st.rerun()
 
-    with col2 := c2:
+    with c2:
         st.subheader("Live Notification Queue")
         for i, t in enumerate(st.session_state.tasks):
             if t['status'] == "Pending":
