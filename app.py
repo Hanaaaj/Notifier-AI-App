@@ -12,122 +12,121 @@ def get_uae_now():
     """Universal UAE time sync to prevent TypeErrors."""
     return datetime.now(pytz.timezone('Asia/Dubai'))
 
-# Initialize Session States
-for key in ['tasks', 'deadlines', 'meetings', 'water_ml', 'last_water_check', 'notified_cache']:
-    if key not in st.session_state:
-        if key == 'water_ml': st.session_state[key] = 0
-        elif key == 'last_water_check': st.session_state[key] = get_uae_now()
-        elif key == 'notified_cache': st.session_state[key] = set()
-        else: st.session_state[key] = []
+# --- 2. DATA INITIALIZATION ---
+# Standardizing keys: We use 'name', 'date', 'type', and 'time' across all modules
+if 'deadlines' not in st.session_state: st.session_state.deadlines = []
+if 'meetings' not in st.session_state: st.session_state.meetings = []
+if 'tasks' not in st.session_state: st.session_state.tasks = []
+if 'water_ml' not in st.session_state: st.session_state.water_ml = 0
+if 'last_water_check' not in st.session_state: st.session_state.last_water_check = get_uae_now()
+if 'notified_cache' not in st.session_state: st.session_state.notified_cache = set()
 
-# --- 2. THE AI BRAIN (Suggestions Engine) ---
-def get_ai_logic():
+# --- 3. THE AI BRAIN ---
+def get_ai_suggestions():
     now = get_uae_now()
-    suggestions = []
+    suggs = []
     
-    # Study Logic: Reverse planning from deadlines
+    # Study Logic
     for dl in st.session_state.deadlines:
         days_to = (dl['date'] - now.date()).days
         if 0 < days_to <= 7:
-            suggestions.append({"title": f"Study: {dl['sub']}", "desc": f"{days_to} days to {dl['type']}. Start deep work.", "cat": "Study"})
+            suggs.append({"title": f"Prep: {dl['name']}", "desc": f"Deadline in {days_to} days. Start reviewing now.", "cat": "Study"})
 
-    # Work Logic: Meeting density
-    if len(st.session_state.meetings) > 3:
-        suggestions.append({"title": "Meeting Fatigue", "desc": "High meeting volume. Schedule a 10m 'No-Screen' break.", "cat": "Work"})
-
-    # Universal Health Logic
-    if now.hour > 20:
-        suggestions.append({"title": "Blue Light Alert", "desc": "Evening detected. Enable night shift mode.", "cat": "Health"})
+    # Work & Health Logic
+    if len(st.session_state.meetings) > 2:
+        suggs.append({"title": "Back-to-Back Meetings", "desc": "Schedule a 5-min eye rest after your next call.", "cat": "Work"})
     
-    return suggestions
+    suggs.append({"title": "Hydration Target", "desc": "You're at 60% of your daily water goal.", "cat": "Health"})
+    return suggs
 
-# --- 3. UI STYLING ---
-st.markdown("""
-    <style>
-    .stApp { background-color: #F8F9FB; }
-    .main-card { background: white; padding: 20px; border-radius: 15px; border: 1px solid #EEE; margin-bottom: 15px; }
-    .section-header { color: #1E293B; font-weight: 700; border-bottom: 2px solid #3B82F6; margin-bottom: 15px; }
-    </style>
-    """, unsafe_allow_html=True)
+# --- 4. SIDEBAR & UTILITIES ---
+with st.sidebar:
+    st.title("Settings")
+    if st.button("Reset All Data"):
+        st.session_state.deadlines = []
+        st.session_state.meetings = []
+        st.session_state.tasks = []
+        st.session_state.water_ml = 0
+        st.session_state.notified_cache = set()
+        st.rerun()
+    st.divider()
+    st.write("Logged in as: Student/Professional")
 
-# --- 4. NAVIGATION & HEADER ---
+# --- 5. MAIN UI ---
 now = get_uae_now()
 curr_time = now.strftime("%H:%M")
 
-st.title("AuraFlow Unified Dashboard 🇦🇪")
-st.info(f"Real-time sync: {now.strftime('%H:%M:%S')} (GST)")
+st.title("AuraFlow: Study, Work & Health 🇦🇪")
+st.caption(f"UAE Time: {now.strftime('%H:%M:%S')} | Dashboard Active")
 
-tab_study, tab_work, tab_health, tab_ai = st.tabs(["🎓 Study", "💼 Work", "🏥 Health", "✨ AI Insights"])
+tabs = st.tabs(["🎓 Study", "💼 Work", "🏥 Health", "✨ AI Insights"])
 
-# --- 5. MODULE: STUDY ---
-with tab_study:
-    st.markdown('<div class="section-header">Academic Resilience</div>', unsafe_allow_html=True)
-    c1, c2 = st.columns([1, 2])
-    with c1:
-        with st.form("study_form"):
-            sub = st.text_input("Module/Subject")
-            dtype = st.selectbox("Type", ["Exam", "Project", "Assignment"])
-            ddate = st.date_input("Deadline", min_value=now.date())
+# --- STUDY TAB ---
+with tabs[0]:
+    st.subheader("Exam & Project Tracker")
+    col1, col2 = st.columns([1, 2])
+    with col1:
+        with st.form("study_input", clear_on_submit=True):
+            # FIXED: Ensuring key name matches 'name'
+            d_name = st.text_input("Subject/Module Name")
+            d_type = st.selectbox("Type", ["Exam", "Project", "Assignment"])
+            d_date = st.date_input("Deadline Date", min_value=now.date())
             if st.form_submit_button("Log Deadline"):
-                st.session_state.deadlines.append({"sub": sub, "type": dtype, "date": ddate})
+                st.session_state.deadlines.append({"name": d_name, "type": d_type, "date": d_date})
                 st.rerun()
-    with c2:
+    with col2:
+        if not st.session_state.deadlines: st.info("No deadlines logged.")
         for dl in sorted(st.session_state.deadlines, key=lambda x: x['date']):
-            st.warning(f"⏳ **{dl['date']}** | {dl['sub']} ({dl['type']})")
+            st.warning(f"⏳ **{dl['date']}** | {dl['name']} ({dl['type']})")
 
-# --- 6. MODULE: WORK ---
-with tab_work:
-    st.markdown('<div class="section-header">Professional Performance</div>', unsafe_allow_html=True)
-    wc1, wc2 = st.columns([1, 2])
-    with wc1:
-        meeting_name = st.text_input("Meeting Title")
-        meeting_time = st.text_input("Time (HH:MM)", value=curr_time)
-        if st.button("Add Meeting"):
-            st.session_state.meetings.append({"name": meeting_name, "time": meeting_time})
-            st.rerun()
-    with wc2:
+# --- WORK TAB ---
+with tabs[1]:
+    st.subheader("Meeting & Task Manager")
+    w1, w2 = st.columns([1, 2])
+    with w1:
+        with st.form("work_input"):
+            m_name = st.text_input("Meeting/Task Title")
+            m_time = st.text_input("Time (HH:MM)", value=curr_time)
+            if st.form_submit_button("Add to Schedule"):
+                st.session_state.meetings.append({"name": m_name, "time": m_time})
+                st.rerun()
+    with w2:
         if st.session_state.meetings:
-            df_m = pd.DataFrame(st.session_state.meetings)
-            st.table(df_m)
+            st.table(pd.DataFrame(st.session_state.meetings))
 
-# --- 7. MODULE: HEALTH ---
-with tab_health:
-    st.markdown('<div class="section-header">Vitals & Wellness</div>', unsafe_allow_html=True)
-    hc1, hc2, hc3 = st.columns(3)
-    hc1.metric("Hydration", f"{st.session_state.water_ml}ml")
-    hc2.metric("Screen Breaks", "4/6")
-    hc3.metric("Daily Movement", "15m")
+# --- HEALTH TAB ---
+with tabs[2]:
+    st.subheader("Wellness Dashboard")
+    h1, h2, h3 = st.columns(3)
+    h1.metric("Hydration", f"{st.session_state.water_ml}ml")
+    h2.metric("Screen Breaks", f"{len(st.session_state.tasks)} done")
+    h3.metric("Status", "Balanced")
     
-    # Health Dashboard
-    df_health = pd.DataFrame({'Activity': ['Water', 'Exercise', 'Sleep'], 'Score': [st.session_state.water_ml/20, 40, 80]})
-    fig_h = px.polar_bar(df_health, r='Score', theta='Activity', template="plotly_white")
-    st.plotly_chart(fig_h, width="stretch")
+    # Future-proof Chart
+    df_h = pd.DataFrame({'Goal': ['Water', 'Focus', 'Exercise'], 'Score': [st.session_state.water_ml/15, 75, 50]})
+    fig = px.line_polar(df_h, r='Score', theta='Goal', line_close=True)
+    st.plotly_chart(fig, width="stretch")
 
-# --- 8. AI & NOTIFICATIONS ---
-with tab_ai:
-    st.subheader("✨ Proactive Guidance")
-    for s in get_ai_logic():
-        with st.container():
-            st.markdown(f"**[{s['cat']}] {s['title']}**")
-            st.caption(s['desc'])
-            if st.button("Schedule this", key=s['title']):
-                st.session_state.tasks.append({"name": s['title'], "time": curr_time, "status": "Pending"})
-                st.toast("Scheduled!")
+# --- AI TAB ---
+with tabs[3]:
+    st.subheader("AI Smart Suggestions")
+    for s in get_ai_suggestions():
+        st.info(f"**{s['cat']}**: {s['title']} \n\n {s['desc']}")
 
-# --- 9. REAL-TIME ENGINE ---
-# Check Water/Exercise Timer (Every 30m)
+# --- 6. REAL-TIME NOTIFIER ---
+# Water reminder logic
 if (now - st.session_state.last_water_check).total_seconds() / 60 >= 30:
-    st.toast("💧 Health Reminder: Drink 250ml water and stretch for 2 minutes!", icon="🧘")
+    st.toast("💧 Time to hydrate! Logging 250ml...", icon="🥛")
     st.session_state.water_ml += 250
     st.session_state.last_water_check = now
 
-# Exact Minute Notifications
-for t in (st.session_state.tasks + st.session_state.meetings):
-    target_time = t.get('time')
-    if target_time == curr_time:
-        nid = f"{t.get('name')}_{curr_time}"
+# Exact time alerts (Meetings/Tasks)
+combined_alerts = st.session_state.meetings + st.session_state.tasks
+for a in combined_alerts:
+    if a.get('time') == curr_time:
+        nid = f"{a['name']}_{curr_time}"
         if nid not in st.session_state.notified_cache:
-            st.toast(f"🔔 ALERT: {t.get('name')} is happening now!", icon="⏰")
+            st.toast(f"🔔 ALERT: {a['name']} starting now!", icon="⏰")
             st.session_state.notified_cache.add(nid)
 
 time.sleep(1)
