@@ -242,6 +242,11 @@ def init_session_state():
             "total_tasks": [],
             "wellness_scores": [],
         }
+    # NEW: tracking for automatic reminders
+    if "last_hydration_check" not in st.session_state:
+        st.session_state["last_hydration_check"] = None
+    if "study_minutes_in_current_block" not in st.session_state:
+        st.session_state["study_minutes_in_current_block"] = 0
 
 
 def load_state_from_file():
@@ -286,6 +291,58 @@ def save_state_to_file():
         "analytics": analytics,
     }
     save_data(data)
+
+
+# ---------------------- STUDY REMINDERS ----------------------
+
+def check_study_reminders():
+    """Check if we are currently in a study block and show automatic reminders."""
+    plan: List[StudyTask] = st.session_state["study_plan"]
+    if not plan:
+        return
+
+    now = datetime.now()
+    today_str = now.date().isoformat()
+
+    # Find current active non-break study block
+    current_block = None
+    for s in plan:
+        if s.date != today_str or s.is_break:
+            continue
+        start = datetime.strptime(f"{s.date} {s.start_time}", "%Y-%m-%d %H:%M")
+        end = start + timedelta(minutes=s.duration_min)
+        if start <= now <= end:
+            current_block = (s, start, end)
+            break
+
+    if current_block is None:
+        # Not in a study block, reset counters
+        st.session_state["study_minutes_in_current_block"] = 0
+        return
+
+    s, start, end = current_block
+
+    # Approximate minutes since block started
+    minutes_since_start = int((now - start).total_seconds() // 60)
+    st.session_state["study_minutes_in_current_block"] = minutes_since_start
+
+    # Hydration reminder every 10 minutes
+    last = st.session_state["last_hydration_check"]
+    if last is None:
+        st.session_state["last_hydration_check"] = now
+        st.info("Hydration reminder: drink water. (Auto)")
+    else:
+        diff_min = (now - last).total_seconds() / 60
+        if diff_min >= 10:
+            st.session_state["last_hydration_check"] = now
+            st.warning("Hydration reminder: drink water. (Every 10 minutes)")
+
+    # Break reminder after 60 minutes in this block
+    if minutes_since_start >= 60:
+        st.error(
+            "Break reminder: you have studied 60 minutes in this block. "
+            "Take a 20‑minute break now."
+        )
 
 
 # ---------------------- STUDY PAGE ----------------------
@@ -335,6 +392,10 @@ def page_study():
         planner: RuleBasedPlanner = st.session_state["planner"]
         st.subheader("Smart Feedback")
         st.info(planner.generate_feedback_message(plan))
+
+        # NEW: automatic in-app reminders based on current time
+        st.subheader("Live Reminders (while page is open)")
+        check_study_reminders()
 
     st.subheader("JSON schedule (Study)")
     st.json([asdict(s) for s in plan])
@@ -512,7 +573,7 @@ def page_dashboard():
     x = range(len(dates))
     ax1.bar(x, completed, label="Completed", color="green")
     ax1.bar(x, missed, bottom=completed, label="Missed", color="red")
-    ax1.set_xticks(x)
+    ax1.set_xticks(list(x))
     ax1.set_xticklabels(dates, rotation=45, ha="right")
     ax1.set_ylabel("Number of tasks")
     ax1.legend()
@@ -525,6 +586,7 @@ def page_dashboard():
     fig2, ax2 = plt.subplots()
     ax2.plot(dates, productivity, marker="o")
     ax2.set_ylabel("Productivity (%)")
+    ax2.set_xticks(range(len(dates)))
     ax2.set_xticklabels(dates, rotation=45, ha="right")
     st.pyplot(fig2)
 
@@ -546,6 +608,7 @@ def page_dashboard():
         fig3, ax3 = plt.subplots()
         ax3.plot(hyd_dates, hydration_pct, marker="o", color="blue")
         ax3.set_ylabel("Hydration (%)")
+        ax3.set_xticks(range(len(hyd_dates)))
         ax3.set_xticklabels(hyd_dates, rotation=45, ha="right")
         st.pyplot(fig3)
     else:
@@ -556,6 +619,7 @@ def page_dashboard():
     fig4, ax4 = plt.subplots()
     ax4.plot(dates, wellness, marker="o", color="purple")
     ax4.set_ylabel("Wellness score (0-100)")
+    ax4.set_xticks(range(len(dates)))
     ax4.set_xticklabels(dates, rotation=45, ha="right")
     st.pyplot(fig4)
 
@@ -578,8 +642,8 @@ def main():
 
     st.sidebar.markdown("### Quick Info")
     st.sidebar.write(
-        "This app generates smart study/work schedules, tracks health, and shows reminders "
-        "while you have the page open."
+        "This app generates smart study/work schedules, tracks health, and shows automatic hydration "
+        "and break reminders while you have the page open."
     )
 
     if page == "Study":
