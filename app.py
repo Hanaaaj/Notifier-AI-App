@@ -2,166 +2,244 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import google.generativeai as genai
+import json
+import threading
+import time
+import math
 from datetime import datetime, timedelta
 
-# --- 1. CONFIG & MODERN STYLING ---
+# =========================
+# CONFIG
+# =========================
 st.set_page_config(page_title="MindFlow | Adaptive Intelligence", page_icon="✨", layout="wide")
 
-st.markdown("""
-    <style>
-    /* Global Background */
-    .stApp { background-color: #F8F9FB; }
-    
-    /* MindFlow Card Design */
-    .metric-card {
-        background-color: white;
-        padding: 24px;
-        border-radius: 20px;
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.03);
-        border: 1px solid #F0F2F6;
-        margin-bottom: 20px;
-    }
-    .metric-title { color: #5F6368; font-size: 14px; font-weight: 500; }
-    .metric-value { color: #1A1C1E; font-size: 32px; font-weight: 700; margin-top: 8px; }
-    
-    /* Smart Suggestion Styling */
-    .suggestion-card {
-        background-color: #FDF4FF;
-        padding: 16px;
-        border-radius: 12px;
-        border: 1px solid #FAE8FF;
-        margin-bottom: 12px;
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-    }
-    
-    /* Priority Badges */
-    .badge-high { background: #FEE2E2; color: #EF4444; padding: 2px 8px; border-radius: 6px; font-size: 11px; font-weight: bold; }
-    .badge-ai { background: #F3E8FF; color: #7E22CE; padding: 2px 8px; border-radius: 6px; font-size: 11px; font-weight: bold; }
-    </style>
-    """, unsafe_allow_html=True)
+# Gemini (FIXED MODEL)
+genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+model = genai.GenerativeModel("gemini-1.5-turbo")
 
-# --- 2. DATA INITIALIZATION ---
-if 'tasks' not in st.session_state:
+DATA_FILE = "mindflow_data.json"
+
+# =========================
+# SAFE DATA LOAD/SAVE
+# =========================
+def load_data():
+    try:
+        with open(DATA_FILE, "r") as f:
+            return json.load(f)
+    except:
+        return {}
+
+def save_data(data):
+    try:
+        with open(DATA_FILE, "w") as f:
+            json.dump(data, f)
+    except:
+        pass
+
+if "db" not in st.session_state:
+    st.session_state.db = load_data()
+
+if "tasks" not in st.session_state:
     st.session_state.tasks = []
-if 'water' not in st.session_state:
-    st.session_state.water = 0 # in ml
-if 'history' not in st.session_state:
-    # Mock history for the weekly dashboard
-    st.session_state.history = pd.DataFrame({
-        'Day': ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
-        'Completed': [5, 3, 6, 2, 4, 7, 0]
+
+if "water" not in st.session_state:
+    st.session_state.water = 0
+
+if "study_plan" not in st.session_state:
+    st.session_state.study_plan = {}
+
+if "hydration_alert" not in st.session_state:
+    st.session_state.hydration_alert = False
+
+# =========================
+# BACKGROUND HYDRATION THREAD
+# =========================
+def hydration_loop():
+    while True:
+        time.sleep(600)  # 10 min
+        st.session_state.hydration_alert = True
+
+if "thread_started" not in st.session_state:
+    thread = threading.Thread(target=hydration_loop, daemon=True)
+    thread.start()
+    st.session_state.thread_started = True
+
+if st.session_state.hydration_alert:
+    st.warning("💧 Time to hydrate!")
+    st.session_state.hydration_alert = False
+
+# =========================
+# RULE-BASED STUDY ENGINE
+# =========================
+def generate_study_plan(module, exam_date, topics, daily_hours):
+    today = datetime.today().date()
+    days_remaining = (exam_date - today).days
+
+    if days_remaining <= 0:
+        raise ValueError("Exam must be future date.")
+
+    topics_per_day = math.ceil(len(topics) / days_remaining)
+
+    # Overload prevention
+    if topics_per_day > 3:
+        topics_per_day = 3
+
+    schedule = {}
+    topic_index = 0
+
+    for d in range(days_remaining):
+        daily_topics = topics[topic_index: topic_index + topics_per_day]
+        if not daily_topics:
+            break
+
+        schedule[f"Day {d+1}"] = {
+            "topics": daily_topics,
+            "study_hours": daily_hours,
+            "break_rule": "20 min break after 60 min",
+            "hydration": "Every 10 min",
+            "exercise": "After 3 hours"
+        }
+        topic_index += topics_per_day
+
+    return {
+        "module": module,
+        "days_remaining": days_remaining,
+        "topics_per_day": topics_per_day,
+        "schedule": schedule
+    }
+
+# =========================
+# WORK ENGINE
+# =========================
+def generate_focus_blocks(tasks, priorities):
+    combined = list(zip(tasks, priorities))
+    combined.sort(key=lambda x: x[1])
+
+    blocks = []
+    for task, p in combined:
+        blocks.append({
+            "task": task,
+            "focus_block": "90 mins",
+            "hydration": "Every 10 mins",
+            "screen_break": "5 min after 60 mins",
+            "priority": p
+        })
+    return blocks
+
+# =========================
+# HEALTH ENGINE
+# =========================
+def calculate_wellness(water, exercise, sleep):
+    score = (water/2000)*40 + (exercise/60)*30 + (sleep/8)*30
+    return round(min(score, 100), 2)
+
+# =========================
+# UI HEADER
+# =========================
+st.title("MindFlow Adaptive Intelligence ✨")
+st.caption("AI-powered Study • Work • Health Optimizer")
+
+# =========================
+# NAVIGATION
+# =========================
+section = st.sidebar.radio("Navigate", ["Study", "Work", "Health", "Dashboard"])
+
+# =========================
+# STUDY SECTION
+# =========================
+if section == "Study":
+    st.header("📚 AI Study Planner")
+
+    module = st.text_input("Module Name")
+    exam_date = st.date_input("Exam Date")
+    topics = st.text_area("Topics (comma separated)")
+    daily_hours = st.number_input("Daily Study Hours", 1, 12)
+
+    if st.button("Generate Study Plan"):
+        try:
+            topic_list = [t.strip() for t in topics.split(",")]
+            plan = generate_study_plan(module, exam_date, topic_list, daily_hours)
+
+            st.session_state.study_plan = plan
+            save_data(plan)
+
+            st.success("Study Plan Generated!")
+            st.json(plan)
+
+            # Gemini Smart Feedback
+            response = model.generate_content(
+                f"Give smart motivational feedback for this plan: {plan}"
+            )
+            st.info(response.text)
+
+        except Exception as e:
+            st.error(str(e))
+
+# =========================
+# WORK SECTION
+# =========================
+elif section == "Work":
+    st.header("💼 Work Focus Planner")
+
+    tasks = st.text_area("Tasks (comma separated)")
+    priorities = st.text_area("Priorities (comma separated numbers)")
+
+    if st.button("Generate Focus Blocks"):
+        try:
+            task_list = [t.strip() for t in tasks.split(",")]
+            priority_list = [int(p.strip()) for p in priorities.split(",")]
+
+            blocks = generate_focus_blocks(task_list, priority_list)
+
+            st.success("Focus Blocks Generated")
+            st.json(blocks)
+
+        except Exception as e:
+            st.error(str(e))
+
+# =========================
+# HEALTH SECTION
+# =========================
+elif section == "Health":
+    st.header("🏥 Health Optimizer")
+
+    hydration_goal = st.number_input("Hydration Goal (ml)", 500, 4000, 2000)
+    exercise = st.number_input("Exercise Minutes", 0, 180, 30)
+    sleep = st.number_input("Sleep Hours", 4, 12, 7)
+
+    if st.button("Calculate Wellness"):
+        score = calculate_wellness(st.session_state.water, exercise, sleep)
+        st.metric("Wellness Score", f"{score}/100")
+
+# =========================
+# DASHBOARD
+# =========================
+elif section == "Dashboard":
+    st.header("📊 Performance Dashboard")
+
+    completed = len([t for t in st.session_state.tasks if t.get("status") == "Done"])
+    missed = len([t for t in st.session_state.tasks if t.get("status") == "Pending"])
+
+    df = pd.DataFrame({
+        "Status": ["Completed", "Pending"],
+        "Count": [completed, missed]
     })
 
-# --- 3. SMART SUGGESTION ENGINE ---
-def get_smart_suggestions():
-    suggestions = []
-    now = datetime.now()
-    
-    # 1. Screen Time Logic
-    suggestions.append({"title": "Eye Rest (20/20/20)", "desc": "Look 20 feet away for 20 seconds", "type": "Health", "ai": True})
-    
-    # 2. Dehydration Logic
-    if st.session_state.water < 1500:
-        suggestions.append({"title": "Hydration Hit", "desc": "You are 500ml behind your daily goal", "type": "Health", "ai": True})
-        
-    # 3. Work/Study Balance
-    work_tasks = [t for t in st.session_state.tasks if t['cat'] in ['Work', 'Study'] and t['status'] == 'Pending']
-    if len(work_tasks) > 3:
-        suggestions.append({"title": "Brief Stretch", "desc": "High workload detected. Stretch for 2 mins", "type": "Personal", "ai": True})
-        
-    return suggestions
-
-# --- 4. MAIN LAYOUT: TOP BAR ---
-col_head, col_btn = st.columns([4, 1])
-with col_head:
-    st.title("Good afternoon! 👋")
-    st.caption("Here's your productivity overview")
-with col_btn:
-    if st.button("➕ New Reminder", use_container_width=True):
-        st.toast("Feature coming soon!")
-
-# --- 5. METRIC GRID ---
-m1, m2, m3, m4 = st.columns(4)
-
-completed_count = len([t for t in st.session_state.tasks if t['status'] == 'Done'])
-with m1:
-    st.markdown(f'<div class="metric-card"><span class="metric-title">✅ Tasks Done</span><div class="metric-value">{completed_count}</div></div>', unsafe_allow_html=True)
-with m2:
-    water_pct = min(int((st.session_state.water / 2000) * 100), 100)
-    st.markdown(f'<div class="metric-card"><span class="metric-title">💧 Water Intake</span><div class="metric-value">{st.session_state.water}ml</div><small>{water_pct}% of goal</small></div>', unsafe_allow_html=True)
-with m3:
-    st.markdown('<div class="metric-card"><span class="metric-title">⏱️ Focus Time</span><div class="metric-value">2h 15m</div></div>', unsafe_allow_html=True)
-with m4:
-    st.markdown('<div class="metric-card"><span class="metric-title">🔥 Streak</span><div class="metric-value">12 Days</div></div>', unsafe_allow_html=True)
-
-# --- 6. SMART SUGGESTIONS AREA ---
-st.markdown("### ✨ Smart Suggestions")
-for sugg in get_smart_suggestions():
-    with st.container():
-        c_a, c_b = st.columns([4, 1])
-        with c_a:
-            st.markdown(f"""
-                <div class="suggestion-card">
-                    <div>
-                        <strong>{sugg['title']}</strong> <span class="badge-ai">✨ AI</span><br>
-                        <small>{sugg['desc']}</small>
-                    </div>
-                </div>
-            """, unsafe_allow_html=True)
-        with c_b:
-            if st.button("Add", key=sugg['title']):
-                st.session_state.tasks.append({"name": sugg['title'], "cat": sugg['type'], "status": "Pending", "time": "Now"})
-                st.rerun()
-
-# --- 7. TASK MANAGER ---
-st.markdown("### 📋 Daily Tasks")
-cat_filter = st.tabs(["All", "💼 Work", "📚 Study", "🏥 Health", "👤 Personal"])
-
-# Mock input for demo
-with st.expander("➕ Quick Add Task"):
-    t_name = st.text_input("Task name")
-    t_cat = st.selectbox("Category", ["Work", "Study", "Health", "Personal"])
-    if st.button("Create Task"):
-        st.session_state.tasks.append({"name": t_name, "cat": t_cat, "status": "Pending", "time": "Today"})
-        st.rerun()
-
-# Task List Display
-if not st.session_state.tasks:
-    st.info("No tasks yet. Use the Smart Suggestions or Quick Add!")
-else:
-    for i, task in enumerate(st.session_state.tasks):
-        with st.container():
-            t_col1, t_col2 = st.columns([5, 1])
-            t_col1.write(f"**{task['name']}** ({task['cat']})")
-            if task['status'] == 'Pending':
-                if t_col2.button("Done", key=f"btn_{i}"):
-                    st.session_state.tasks[i]['status'] = 'Done'
-                    st.rerun()
-            else:
-                t_col2.write("✅")
-
-# --- 8. ANALYSIS DASHBOARD ---
-st.markdown("---")
-st.markdown("### 📈 Analytics Dashboard")
-tab_week, tab_month = st.tabs(["Weekly Progress", "Monthly Analysis"])
-
-with tab_week:
-    fig = px.bar(st.session_state.history, x='Day', y='Completed', 
-                 title="Tasks Completed this Week",
-                 color_discrete_sequence=['#A7F3D0'])
-    fig.update_layout(plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', yaxis_showgrid=False)
+    fig = px.bar(df, x="Status", y="Count", color="Status")
     st.plotly_chart(fig, use_container_width=True)
 
-with tab_month:
-    st.write("#### AI Monthly Insights")
-    st.info("AI Analysis: You are 15% more productive on Tuesday mornings. Consider scheduling your deep work then.")
-    
-# --- 9. HYDRATION QUICK ACTION ---
+    # Productivity Trend Mock
+    trend = [3, 5, 4, 6, 7, 5, 8]
+    trend_df = pd.DataFrame({"Day": range(1, 8), "Score": trend})
+    fig2 = px.line(trend_df, x="Day", y="Score", title="Productivity Trend")
+    st.plotly_chart(fig2, use_container_width=True)
+
+# =========================
+# SIDEBAR HYDRATION TRACKER
+# =========================
 st.sidebar.markdown("### 💧 Hydration Tracker")
 add_water = st.sidebar.select_slider("Add water (ml)", options=[250, 500, 750])
 if st.sidebar.button("Log Water"):
     st.session_state.water += add_water
-    st.sidebar.success(f"Added {add_water}ml!")
+    st.sidebar.success(f"Added {add_water}ml")
     st.rerun()
