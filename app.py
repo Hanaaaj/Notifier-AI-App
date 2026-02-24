@@ -1,58 +1,105 @@
 import streamlit as st
+import pandas as pd
+import plotly.express as px
+from google import genai
 from datetime import datetime
+import pytz
 import time
 
-# 1. Setup
-st.set_page_config(page_title="Simple Notifier", page_icon="🔔")
+# --- 1. SETTINGS & TIMEZONE ---
+st.set_page_config(page_title="MindFlow AI", page_icon="✨", layout="wide")
+uae_tz = pytz.timezone('Asia/Dubai')
 
-# 2. Initialize Session State
-if "start_time" not in st.session_state:
-    st.session_state.start_time = time.time()
-if "tasks" not in st.session_state:
-    st.session_state.tasks = []
+def get_now():
+    return datetime.now(uae_tz)
 
-# 3. Sidebar - Settings
-st.sidebar.title("🔔 Settings")
-interval = st.sidebar.slider("Notification Interval (mins)", 1, 60, 20)
-if st.sidebar.button("Reset Timer"):
-    st.session_state.start_time = time.time()
-    st.toast("Timer Reset!")
+# --- 2. AI INITIALIZATION ---
+def get_ai_response(prompt):
+    if "GEMINI_API_KEY" not in st.secrets:
+        return "API Key not found."
+    try:
+        client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
+        response = client.models.generate_content(
+            model="gemini-1.5-flash", 
+            contents=prompt
+        )
+        return response.text
+    except Exception as e:
+        return f"AI logic paused: {str(e)[:50]}"
 
-# 4. Main UI
-st.title("Focus & Notify")
+# --- 3. SESSION STATE ---
+if "tasks" not in st.session_state: st.session_state.tasks = []
+if "water_ml" not in st.session_state: st.session_state.water_ml = 0
+if "last_water_check" not in st.session_state: 
+    # FIX: Ensure initial state is timezone-aware to match 'now'
+    st.session_state.last_water_check = get_now()
 
-# Task Input
-with st.form("task_form", clear_on_submit=True):
-    new_task = st.text_input("Enter a priority task:")
-    if st.form_submit_button("Add Task"):
-        if new_task:
-            st.session_state.tasks.append(new_task)
+# --- 4. UI NAVIGATION ---
+now = get_now()
+st.sidebar.title("✨ MindFlow")
+page = st.sidebar.radio("Go to", ["Dashboard", "Tasks", "Wellness"])
+
+# --- 5. DASHBOARD PAGE ---
+if page == "Dashboard":
+    st.title("Performance Dashboard 📈")
+    st.caption(f"Current Time (UAE): {now.strftime('%I:%M %p')}")
+
+    c1, c2 = st.columns(2)
+    with c1:
+        st.metric("Hydration", f"{st.session_state.water_ml} ml", "Goal: 2000ml")
+    with c2:
+        pending = len([t for t in st.session_state.tasks if t['status'] == "Pending"])
+        st.metric("Pending Tasks", pending)
+
+    if st.session_state.tasks:
+        df = pd.DataFrame(st.session_state.tasks)
+        # Replacing use_container_width with width='stretch' per deprecation notice
+        fig = px.pie(df, names='status', title="Task Completion", hole=0.4)
+        st.plotly_chart(fig, width='stretch')
+    
+    if st.button("Get AI Performance Strategy"):
+        with st.spinner("AI analyzing..."):
+            tip = get_ai_response(f"I have {pending} tasks and {st.session_state.water_ml}ml water. Give a 1-sentence tip.")
+            st.success(tip)
+
+# --- 6. TASKS PAGE ---
+elif page == "Tasks":
+    st.header("💼 Task Manager")
+    with st.form("add_task", clear_on_submit=True):
+        name = st.text_input("Task Description")
+        if st.form_submit_button("Add Task"):
+            st.session_state.tasks.append({"name": name, "status": "Pending"})
             st.rerun()
 
-# Display Tasks
-if st.session_state.tasks:
-    st.subheader("Your Priorities")
-    for i, task in enumerate(st.session_state.tasks):
-        col1, col2 = st.columns([4, 1])
-        col1.write(f"✅ {task}")
-        if col2.button("Done", key=f"done_{i}"):
-            st.session_state.tasks.pop(i)
-            st.rerun()
-else:
-    st.info("No active tasks. Add one above!")
+    for i, t in enumerate(st.session_state.tasks):
+        if t['status'] == "Pending":
+            col_a, col_b = st.columns([4, 1])
+            col_a.write(f"• {t['name']}")
+            if col_b.button("Done", key=f"btn_{i}"):
+                t['status'] = "Done"
+                st.rerun()
 
-# 5. The Notifier Logic
-elapsed_time = time.time() - st.session_state.start_time
-remaining = (interval * 60) - elapsed_time
+# --- 7. WELLNESS PAGE ---
+elif page == "Wellness":
+    st.header("🏥 Wellness Hub")
+    st.markdown("### The 20-20-20 Rule")
+    st.write("To prevent eye strain, every 20 minutes, look at something 20 feet away for 20 seconds.")
+    
+    
+    
+    st.divider()
+    st.progress(min(st.session_state.water_ml / 2000, 1.0))
+    if st.button("🥤 Drink 250ml"):
+        st.session_state.water_ml += 250
+        st.rerun()
 
-st.divider()
-if remaining <= 0:
-    st.balloons()
-    st.toast("🔔 TIME'S UP! Take a break or drink water!", icon="💧")
-    st.warning("⏰ Notification Triggered! Please reset the timer in the sidebar.")
-else:
-    mins, secs = divmod(int(remaining), 60)
-    st.metric("Next Notification In", f"{mins:02d}:{secs:02d}")
-    # Auto-refresh every 10 seconds to update the countdown
-    time.sleep(10)
-    st.rerun()
+# --- 8. GLOBAL NOTIFICATION LOGIC ---
+# FIX: 'now' and 'last_water_check' are both offset-aware (pytz)
+time_diff = (now - st.session_state.last_water_check).total_seconds() / 60
+if time_diff >= 30:
+    st.toast("💧 Time to hydrate! Stay sharp.", icon="🥤")
+    st.session_state.last_water_check = now
+
+# Keep the app active
+time.sleep(5)
+st.rerun()
