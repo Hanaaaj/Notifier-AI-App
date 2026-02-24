@@ -17,6 +17,7 @@ class StudyTask:
     start_time: str    # HH:MM
     duration_min: int
     is_break: bool = False
+    completed: bool = False   # NEW: track done/not done
 
 
 @dataclass
@@ -47,8 +48,6 @@ class RuleBasedPlanner:
         self.max_study_minutes_per_day = max_study_minutes_per_day
         self.max_work_minutes_per_day = max_work_minutes_per_day
 
-    # --- STUDY PLANNING ---
-
     def plan_study(
         self,
         module_name: str,
@@ -65,7 +64,6 @@ class RuleBasedPlanner:
         total_minutes_per_day = int(daily_hours * 60)
         total_minutes_per_day = min(total_minutes_per_day, self.max_study_minutes_per_day)
 
-        # Evenly distribute topics across days
         topics_per_day = max(1, len(topics) // days_remaining)
         if topics_per_day * days_remaining < len(topics):
             topics_per_day += 1
@@ -98,12 +96,12 @@ class RuleBasedPlanner:
                         start_time=current_start.strftime("%H:%M"),
                         duration_min=duration,
                         is_break=False,
+                        completed=False,
                     )
                 )
 
                 available_minutes -= duration
 
-                # Insert 20-min break after every 60 min of study
                 if available_minutes > 0 and duration >= 60:
                     break_start = current_start + timedelta(minutes=duration)
                     plan.append(
@@ -114,6 +112,7 @@ class RuleBasedPlanner:
                             start_time=break_start.strftime("%H:%M"),
                             duration_min=20,
                             is_break=True,
+                            completed=False,
                         )
                     )
                     available_minutes -= 20
@@ -125,8 +124,6 @@ class RuleBasedPlanner:
 
         return plan
 
-    # --- WORK PLANNING ---
-
     def plan_work(
         self,
         meetings: List[Dict[str, Any]],
@@ -135,7 +132,6 @@ class RuleBasedPlanner:
     ) -> List[WorkTask]:
         tasks: List[WorkTask] = []
 
-        # Focus blocks day before each deadline
         for d in deadlines:
             deadline_date = datetime.strptime(d["date"], "%Y-%m-%d").date()
             day_before = (deadline_date - timedelta(days=1)).isoformat()
@@ -150,7 +146,6 @@ class RuleBasedPlanner:
                 )
             )
 
-        # Meetings
         for m in meetings:
             tasks.append(
                 WorkTask(
@@ -163,7 +158,6 @@ class RuleBasedPlanner:
                 )
             )
 
-        # Overload prevention per day
         tasks_by_date: Dict[str, List[WorkTask]] = {}
         for t in tasks:
             tasks_by_date.setdefault(t.date, []).append(t)
@@ -179,8 +173,6 @@ class RuleBasedPlanner:
                 balanced.append(t)
 
         return balanced
-
-    # --- FEEDBACK ---
 
     def generate_feedback_message(self, study_plan: List[StudyTask]) -> str:
         if not study_plan:
@@ -213,9 +205,7 @@ def load_data() -> Dict[str, Any]:
     try:
         with open(DATA_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
-    except FileNotFoundError:
-        return {}
-    except json.JSONDecodeError:
+    except (FileNotFoundError, json.JSONDecodeError):
         return {}
 
 
@@ -238,15 +228,20 @@ def init_session_state():
     if "analytics" not in st.session_state:
         st.session_state["analytics"] = {
             "history_dates": [],
-            "completed_tasks": [],
-            "total_tasks": [],
+            "study_completed": [],
+            "study_total": [],
+            "work_completed": [],
+            "work_total": [],
             "wellness_scores": [],
         }
-    # NEW: tracking for automatic reminders
     if "last_hydration_check" not in st.session_state:
         st.session_state["last_hydration_check"] = None
     if "study_minutes_in_current_block" not in st.session_state:
         st.session_state["study_minutes_in_current_block"] = 0
+    if "temp_meetings" not in st.session_state:
+        st.session_state["temp_meetings"] = []
+    if "temp_deadlines" not in st.session_state:
+        st.session_state["temp_deadlines"] = []
 
 
 def load_state_from_file():
@@ -271,8 +266,10 @@ def load_state_from_file():
         "analytics",
         {
             "history_dates": [],
-            "completed_tasks": [],
-            "total_tasks": [],
+            "study_completed": [],
+            "study_total": [],
+            "work_completed": [],
+            "work_total": [],
             "wellness_scores": [],
         },
     )
@@ -296,7 +293,6 @@ def save_state_to_file():
 # ---------------------- STUDY REMINDERS ----------------------
 
 def check_study_reminders():
-    """Check if we are currently in a study block and show automatic reminders."""
     plan: List[StudyTask] = st.session_state["study_plan"]
     if not plan:
         return
@@ -304,7 +300,6 @@ def check_study_reminders():
     now = datetime.now()
     today_str = now.date().isoformat()
 
-    # Find current active non-break study block
     current_block = None
     for s in plan:
         if s.date != today_str or s.is_break:
@@ -316,17 +311,13 @@ def check_study_reminders():
             break
 
     if current_block is None:
-        # Not in a study block, reset counters
         st.session_state["study_minutes_in_current_block"] = 0
         return
 
     s, start, end = current_block
-
-    # Approximate minutes since block started
     minutes_since_start = int((now - start).total_seconds() // 60)
     st.session_state["study_minutes_in_current_block"] = minutes_since_start
 
-    # Hydration reminder every 10 minutes
     last = st.session_state["last_hydration_check"]
     if last is None:
         st.session_state["last_hydration_check"] = now
@@ -337,11 +328,10 @@ def check_study_reminders():
             st.session_state["last_hydration_check"] = now
             st.warning("Hydration reminder: drink water. (Every 10 minutes)")
 
-    # Break reminder after 60 minutes in this block
     if minutes_since_start >= 60:
         st.error(
             "Break reminder: you have studied 60 minutes in this block. "
-            "Take a 20‑minute break now."
+            "Take a 20‑minute break now (20 minutes)."
         )
 
 
@@ -382,23 +372,28 @@ def page_study():
     if not plan:
         st.info("No study timetable yet. Generate one above.")
     else:
-        for s in plan:
-            label = "Break" if s.is_break else "Study"
-            st.write(
-                f"**{label}** | {s.date} {s.start_time} | {s.duration_min} min | "
-                f"{s.module} - {s.topic}"
-            )
+        for idx, s in enumerate(plan):
+            cols = st.columns([4, 1])
+            with cols[0]:
+                label = "Break" if s.is_break else "Study"
+                st.write(
+                    f"**{label}** | {s.date} {s.start_time} | {s.duration_min} min | "
+                    f"{s.module} - {s.topic}"
+                )
+            with cols[1]:
+                if not s.is_break:
+                    done = st.checkbox("Done", value=s.completed, key=f"study_done_{idx}")
+                    s.completed = done
+                    st.session_state["study_plan"][idx] = s
 
         planner: RuleBasedPlanner = st.session_state["planner"]
         st.subheader("Smart Feedback")
         st.info(planner.generate_feedback_message(plan))
 
-        # NEW: automatic in-app reminders based on current time
         st.subheader("Live Reminders (while page is open)")
         check_study_reminders()
 
-    st.subheader("JSON schedule (Study)")
-    st.json([asdict(s) for s in plan])
+    # JSON still exists internally via save_state_to_file(), but not shown
 
 
 # ---------------------- WORK PAGE ----------------------
@@ -413,9 +408,6 @@ def page_work():
         meeting_time = st.time_input("Meeting start time")
         meeting_duration = st.number_input("Meeting duration (minutes)", min_value=15, max_value=480, value=60, step=15)
         submitted_meeting = st.form_submit_button("Add meeting")
-
-    if "temp_meetings" not in st.session_state:
-        st.session_state["temp_meetings"] = []
 
     if submitted_meeting:
         st.session_state["temp_meetings"].append(
@@ -437,9 +429,6 @@ def page_work():
         deadline_title = st.text_input("Task/Project title")
         deadline_date = st.date_input("Deadline date")
         submitted_deadline = st.form_submit_button("Add deadline")
-
-    if "temp_deadlines" not in st.session_state:
-        st.session_state["temp_deadlines"] = []
 
     if submitted_deadline:
         st.session_state["temp_deadlines"].append(
@@ -470,22 +459,18 @@ def page_work():
         st.info("No work tasks yet. Add meetings/deadlines and generate.")
     else:
         for idx, t in enumerate(tasks):
-            col1, col2, col3 = st.columns([3, 2, 1])
+            col1, col2 = st.columns([4, 1])
             with col1:
                 st.write(f"{t.date} {t.start_time} | {t.title} | {t.duration_min} min | Priority: {t.priority}")
             with col2:
-                st.write("Completed:" if t.completed else "Pending")
-            with col3:
-                if st.button("Toggle", key=f"toggle_{idx}"):
-                    t.completed = not t.completed
-                    st.session_state["work_tasks"][idx] = t
-                    save_state_to_file()
+                done = st.checkbox("Done", value=t.completed, key=f"work_done_{idx}")
+                t.completed = done
+                st.session_state["work_tasks"][idx] = t
 
-    st.subheader("JSON schedule (Work)")
-    st.json([asdict(w) for w in st.session_state["work_tasks"]])
+    # JSON stored internally only
 
 
-# ---------------------- HEALTH PAGE ----------------------
+# ---------------------- HEALTH & ANALYTICS ----------------------
 
 def compute_wellness_score(h: HealthDay) -> float:
     if h.water_goal_glasses == 0 or h.exercise_minutes_target == 0 or h.sleep_hours_target == 0:
@@ -496,6 +481,41 @@ def compute_wellness_score(h: HealthDay) -> float:
     sleep_score = min(1.0, h.sleep_hours_done / h.sleep_hours_target)
 
     return round((water_score + exercise_score + sleep_score) / 3 * 100, 1)
+
+
+def update_analytics_for_today():
+    today = datetime.now().date().isoformat()
+    analytics = st.session_state["analytics"]
+
+    study_today = [s for s in st.session_state["study_plan"] if s.date == today and not s.is_break]
+    work_today = [w for w in st.session_state["work_tasks"] if w.date == today]
+
+    study_total = len(study_today)
+    study_completed = len([s for s in study_today if s.completed])
+    work_total = len(work_today)
+    work_completed = len([w for w in work_today if w.completed])
+
+    health_days: Dict[str, HealthDay] = st.session_state["health_days"]
+    if today in health_days:
+        wellness = compute_wellness_score(health_days[today])
+    else:
+        wellness = 0.0
+
+    if analytics["history_dates"] and analytics["history_dates"][-1] == today:
+        analytics["study_total"][-1] = study_total
+        analytics["study_completed"][-1] = study_completed
+        analytics["work_total"][-1] = work_total
+        analytics["work_completed"][-1] = work_completed
+        analytics["wellness_scores"][-1] = wellness
+    else:
+        analytics["history_dates"].append(today)
+        analytics["study_total"].append(study_total)
+        analytics["study_completed"].append(study_completed)
+        analytics["work_total"].append(work_total)
+        analytics["work_completed"].append(work_completed)
+        analytics["wellness_scores"].append(wellness)
+
+    st.session_state["analytics"] = analytics
 
 
 def page_health():
@@ -527,19 +547,9 @@ def page_health():
         health_days[today] = h
         st.session_state["health_days"] = health_days
 
-        # update analytics
-        analytics = st.session_state["analytics"]
-        analytics["history_dates"].append(today)
-        # use work tasks for task completion stats
-        total_tasks = len(st.session_state["work_tasks"])
-        completed = len([t for t in st.session_state["work_tasks"] if t.completed])
-        analytics["completed_tasks"].append(completed)
-        analytics["total_tasks"].append(total_tasks)
-        analytics["wellness_scores"].append(compute_wellness_score(h))
-        st.session_state["analytics"] = analytics
-
+        update_analytics_for_today()
         save_state_to_file()
-        st.success("Health data saved.")
+        st.success("Health data saved and analytics updated.")
 
     if today in health_days:
         st.subheader("Today summary")
@@ -549,6 +559,10 @@ def page_health():
         st.write(f"Sleep: {h.sleep_hours_done}/{h.sleep_hours_target} hours")
         st.write(f"Daily wellness score: {compute_wellness_score(h)} / 100")
 
+    # Keep analytics updated when user marks tasks as done
+    update_analytics_for_today()
+    save_state_to_file()
+
 
 # ---------------------- DASHBOARD PAGE ----------------------
 
@@ -557,71 +571,46 @@ def page_dashboard():
 
     analytics = st.session_state["analytics"]
     dates = analytics["history_dates"]
-    completed = analytics["completed_tasks"]
-    total = analytics["total_tasks"]
+    study_completed = analytics["study_completed"]
+    study_total = analytics["study_total"]
+    work_completed = analytics["work_completed"]
+    work_total = analytics["work_total"]
     wellness = analytics["wellness_scores"]
 
     if not dates:
-        st.info("No analytics data yet. Save some health data first.")
+        st.info("No analytics data yet. Visit Health tab and save at least one day.")
         return
 
-    # Completed vs missed tasks bar chart
-    st.subheader("Completed vs Missed Tasks")
-    missed = [t - c for t, c in zip(total, completed)]
-
+    # Study productivity
+    st.subheader("Study Productivity (completed vs total sessions)")
+    study_prod = [c / t * 100 if t > 0 else 0 for c, t in zip(study_completed, study_total)]
     fig1, ax1 = plt.subplots()
     x = range(len(dates))
-    ax1.bar(x, completed, label="Completed", color="green")
-    ax1.bar(x, missed, bottom=completed, label="Missed", color="red")
+    ax1.bar(x, study_prod, color="blue")
     ax1.set_xticks(list(x))
     ax1.set_xticklabels(dates, rotation=45, ha="right")
-    ax1.set_ylabel("Number of tasks")
-    ax1.legend()
+    ax1.set_ylabel("Study productivity (%)")
     st.pyplot(fig1)
 
-    # Productivity trend (line chart)
-    st.subheader("Productivity Trend")
-    productivity = [c / t * 100 if t > 0 else 0 for c, t in zip(completed, total)]
-
+    # Work performance
+    st.subheader("Work Performance (completed vs total tasks)")
+    work_perf = [c / t * 100 if t > 0 else 0 for c, t in zip(work_completed, work_total)]
     fig2, ax2 = plt.subplots()
-    ax2.plot(dates, productivity, marker="o")
-    ax2.set_ylabel("Productivity (%)")
-    ax2.set_xticks(range(len(dates)))
+    x2 = range(len(dates))
+    ax2.bar(x2, work_perf, color="green")
+    ax2.set_xticks(list(x2))
     ax2.set_xticklabels(dates, rotation=45, ha="right")
+    ax2.set_ylabel("Work performance (%)")
     st.pyplot(fig2)
 
-    # Hydration tracking: use water percentage
-    st.subheader("Hydration Tracking")
-    health_days: Dict[str, HealthDay] = st.session_state["health_days"]
-    hydration_pct = []
-    hyd_dates = []
-    for d in dates:
-        if d in health_days:
-            h = health_days[d]
-            if h.water_goal_glasses > 0:
-                hydration_pct.append(h.water_taken_glasses / h.water_goal_glasses * 100)
-            else:
-                hydration_pct.append(0)
-            hyd_dates.append(d)
-
-    if hyd_dates:
-        fig3, ax3 = plt.subplots()
-        ax3.plot(hyd_dates, hydration_pct, marker="o", color="blue")
-        ax3.set_ylabel("Hydration (%)")
-        ax3.set_xticks(range(len(hyd_dates)))
-        ax3.set_xticklabels(hyd_dates, rotation=45, ha="right")
-        st.pyplot(fig3)
-    else:
-        st.write("No hydration data yet.")
-
-    # Wellness score visualization
+    # Wellness score
     st.subheader("Wellness Score")
-    fig4, ax4 = plt.subplots()
-    ax4.plot(dates, wellness, marker="o", color="purple")
-    ax4.set_ylabel("Wellness score (0-100)")
-    ax4.set_xticks(range(len(dates)))
-    ax4.set_xticklabels(dates, rotation=45, ha="right")
-    st.pyplot(fig4)
+    fig3, ax3 = plt.subplots()
+    ax3.plot(dates, wellness, marker="o", color="purple")
+    ax3.set_xticks(range(len(dates)))
+    ax3.set_xticklabels(dates, rotation=45, ha="right")
+    ax3.set_ylabel("Wellness score (0–100)")
+    st.pyplot(fig3)
 
 
 # ---------------------- MAIN APP ----------------------
@@ -631,7 +620,6 @@ def main():
 
     init_session_state()
 
-    # Load from file once per session
     if "loaded_from_file" not in st.session_state:
         load_state_from_file()
         st.session_state["loaded_from_file"] = True
@@ -640,10 +628,10 @@ def main():
 
     page = st.sidebar.radio("Navigate", ["Study", "Work", "Health", "Dashboard"])
 
-    st.sidebar.markdown("### Quick Info")
+    st.sidebar.markdown("### Info")
     st.sidebar.write(
-        "This app generates smart study/work schedules, tracks health, and shows automatic hydration "
-        "and break reminders while you have the page open."
+        "Automatically plans study/work, tracks health, and shows hydration + break reminders "
+        "while the page is open."
     )
 
     if page == "Study":
@@ -658,7 +646,7 @@ def main():
     st.sidebar.markdown("---")
     if st.sidebar.button("Save now"):
         save_state_to_file()
-        st.sidebar.success("Data saved to JSON.")
+        st.sidebar.success("Data saved.")
 
 
 if __name__ == "__main__":
