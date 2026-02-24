@@ -1,341 +1,310 @@
 import json
-from dataclasses import dataclass, asdict
+import streamlit as st
+import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
 from typing import List, Dict, Any
 
-import streamlit as st
-import matplotlib.pyplot as plt
+# ---------------------- SIMPLE DICT DATA (NO DATACLASSES) ----------------------
+def create_study_task(module, topic, date, start_time, duration_min, is_break=False, completed=False):
+    return {
+        "module": module,
+        "topic": topic,
+        "date": date,
+        "start_time": start_time,
+        "duration_min": duration_min,
+        "is_break": is_break,
+        "completed": completed
+    }
 
+def create_work_task(title, date, start_time, duration_min, priority="Medium", completed=False):
+    return {
+        "title": title,
+        "date": date,
+        "start_time": start_time,
+        "duration_min": duration_min,
+        "priority": priority,
+        "completed": completed
+    }
 
-# ---------------------- DATA MODELS ----------------------
-@dataclass
-class StudyTask:
-    module: str
-    topic: str
-    date: str
-    start_time: str
-    duration_min: int
-    is_break: bool
-    completed: bool
+def create_health_day(date, water_goal=8, water_done=0, exercise_goal=30, exercise_done=0, sleep_goal=8.0, sleep_done=0.0):
+    return {
+        "date": date,
+        "water_goal_glasses": water_goal,
+        "water_taken_glasses": water_done,
+        "exercise_minutes_target": exercise_goal,
+        "exercise_minutes_done": exercise_done,
+        "sleep_hours_target": sleep_goal,
+        "sleep_hours_done": sleep_done
+    }
 
-@dataclass
-class WorkTask:
-    title: str
-    date: str
-    start_time: str
-    duration_min: int
-    priority: str
-    completed: bool
-
-@dataclass
-class HealthDay:
-    date: str
-    water_goal_glasses: int
-    water_taken_glasses: int
-    exercise_minutes_target: int
-    exercise_minutes_done: int
-    sleep_hours_target: float
-    sleep_hours_done: float
-
-
-# ---------------------- RULE-BASED ENGINE ----------------------
-class RuleBasedPlanner:
-    def __init__(self, max_study_minutes_per_day=360, max_work_minutes_per_day=420):
-        self.max_study_minutes_per_day = max_study_minutes_per_day
-        self.max_work_minutes_per_day = max_work_minutes_per_day
-
-    def plan_study(self, module_name: str, exam_date: datetime, project_deadline: datetime,
-                   topics: List[str], daily_hours: float, start_hour: int = 9) -> List[StudyTask]:
+# ---------------------- PLANNER ----------------------
+class Planner:
+    def plan_study(self, module, exam_date, topics, daily_hours):
         days_remaining = max(1, (exam_date.date() - datetime.now().date()).days)
-        total_minutes_per_day = min(int(daily_hours * 60), self.max_study_minutes_per_day)
+        total_minutes = min(int(daily_hours * 60), 360)
         topics_per_day = max(1, len(topics) // days_remaining)
         
         plan = []
-        topic_index = 0
+        topic_idx = 0
         current_date = datetime.now().date()
-
-        while topic_index < len(topics):
-            day_topics = topics[topic_index:topic_index + topics_per_day]
-            topic_index += len(day_topics)
+        
+        for day in range(days_remaining):
+            day_topics = topics[topic_idx:topic_idx + topics_per_day]
+            topic_idx += len(day_topics)
             
-            available_minutes = total_minutes_per_day
-            current_start = datetime.combine(current_date, datetime.min.time()).replace(
-                hour=start_hour, minute=0)
+            if not day_topics:
+                break
+                
+            available_min = total_minutes
+            current_time = datetime.combine(current_date, datetime.min.time()).replace(hour=9)
             
-            per_topic_minutes = max(30, available_minutes // max(1, len(day_topics)))
-
             for topic in day_topics:
-                if available_minutes <= 0:
+                if available_min <= 0:
                     break
-                duration = min(per_topic_minutes, available_minutes)
-                plan.append(StudyTask(module_name, topic, current_date.isoformat(),
-                                    current_start.strftime("%H:%M"), duration, False, False))
-                available_minutes -= duration
-
-                if available_minutes > 0 and duration >= 60:
-                    break_start = current_start + timedelta(minutes=duration)
-                    plan.append(StudyTask(module_name, "Break", current_date.isoformat(),
-                                        break_start.strftime("%H:%M"), 20, True, False))
-                    available_minutes -= 20
-                    current_start = break_start + timedelta(minutes=20)
-                else:
-                    current_start += timedelta(minutes=duration)
+                duration = min(60, available_min)
+                plan.append(create_study_task(module, topic, current_date.isoformat(), 
+                                            current_time.strftime("%H:%M"), duration))
+                available_min -= duration
+                current_time += timedelta(minutes=duration)
+                
+                if available_min > 0 and duration >= 60:
+                    plan.append(create_study_task(module, "BREAK", current_date.isoformat(), 
+                                                current_time.strftime("%H:%M"), 20, True))
+                    available_min -= 20
+                    current_time += timedelta(minutes=20)
             
             current_date += timedelta(days=1)
         return plan
 
-    def plan_work(self, meetings: List[Dict], deadlines: List[Dict], focus_block_minutes=50) -> List[WorkTask]:
+    def plan_work(self, meetings, deadlines):
         tasks = []
-        for d in deadlines:
-            day_before = (datetime.strptime(d["date"], "%Y-%m-%d").date() - timedelta(days=1)).isoformat()
-            tasks.append(WorkTask(f"Focus: {d['title']}", day_before, "14:00", focus_block_minutes, "High", False))
-        for m in meetings:
-            tasks.append(WorkTask(f"Meeting: {m['title']}", m["date"], m["start_time"], 
-                                m.get("duration_min", 60), "Medium", False))
+        for deadline in deadlines:
+            day_before = (datetime.strptime(deadline["date"], "%Y-%m-%d").date() - timedelta(days=1)).isoformat()
+            tasks.append(create_work_task(f"Focus: {deadline['title']}", day_before, "14:00", 50, "High"))
+        for meeting in meetings:
+            tasks.append(create_work_task(meeting["title"], meeting["date"], meeting["start_time"], 60, "Medium"))
         return tasks
 
-    def generate_feedback_message(self, study_plan: List[StudyTask]) -> str:
-        if not study_plan:
-            return "No study sessions scheduled yet."
-        first = study_plan[0]
-        topics = [t for t in study_plan if not t.is_break]
-        completed = len([t for t in topics if t.completed])
-        return f"{len(topics)} topics total ({completed} done). Study starting at {first.start_time}. Hydrate every 10 min, break after 60 min."
-
-
 # ---------------------- STORAGE ----------------------
-DATA_FILE = "schedule_data.json"
+DATA_FILE = "data.json"
 
 def load_data():
     try:
         with open(DATA_FILE, "r") as f:
             return json.load(f)
     except:
-        return {}
+        return {"study_plan": [], "work_tasks": [], "health_days": {}, "analytics": {"dates": [], "study": [0,0], "work": [0,0], "wellness": []}}
 
 def save_data(data):
     with open(DATA_FILE, "w") as f:
         json.dump(data, f, indent=2)
 
+# ---------------------- INIT ----------------------
+def init_app():
+    if "planner" not in st.session_state:
+        st.session_state.planner = Planner()
+        st.session_state.study_plan = []
+        st.session_state.work_tasks = []
+        st.session_state.health_days = {}
+        st.session_state.temp_meetings = []
+        st.session_state.temp_deadlines = []
+        st.session_state.last_hydration = None
+        st.session_state.analytics = {"dates": [], "study": [0,0], "work": [0,0], "wellness": []}
+        data = load_data()
+        st.session_state.study_plan = data.get("study_plan", [])
+        st.session_state.work_tasks = data.get("work_tasks", [])
+        st.session_state.health_days = data.get("health_days", {})
 
-# ---------------------- SESSION HELPERS ----------------------
-def init_session_state():
-    defaults = {
-        "planner": RuleBasedPlanner(),
-        "study_plan": [],
-        "work_tasks": [],
-        "health_days": {},
-        "analytics": {"history_dates": [], "study_completed": [], "study_total": [], 
-                     "work_completed": [], "work_total": [], "wellness_scores": []},
-        "last_hydration_check": None,
-        "study_minutes_in_current_block": 0,
-        "temp_meetings": [],
-        "temp_deadlines": []
-    }
-    for key, value in defaults.items():
-        if key not in st.session_state:
-            st.session_state[key] = value
-
-
-def load_state_from_file():
-    data = load_data()
-    st.session_state["study_plan"] = [StudyTask(**item) for item in data.get("study_plan", [])]
-    st.session_state["work_tasks"] = [WorkTask(**item) for item in data.get("work_tasks", [])]
-    st.session_state["health_days"] = {d: HealthDay(**hd) for d, hd in data.get("health_days", {}).items()}
-    st.session_state["analytics"] = data.get("analytics", st.session_state["analytics"])
-
-
-def save_state_to_file():
-    data = {
-        "study_plan": [asdict(s) for s in st.session_state["study_plan"]],
-        "work_tasks": [asdict(w) for w in st.session_state["work_tasks"]],
-        "health_days": {d: asdict(h) for d, h in st.session_state["health_days"].items()},
-        "analytics": st.session_state["analytics"]
-    }
-    save_data(data)
-
-
-# ---------------------- STUDY REMINDERS ----------------------
-def check_study_reminders():
-    plan = st.session_state["study_plan"]
-    if not plan:
-        return
-
+# ---------------------- REMINDERS ----------------------
+def check_reminders():
+    plan = st.session_state.study_plan
     now = datetime.now()
-    today_str = now.date().isoformat()
+    today = now.date().isoformat()
     
-    for s in plan:
-        if s.date == today_str and not s.is_break:
-            start = datetime.strptime(f"{s.date} {s.start_time}", "%Y-%m-%d %H:%M")
-            end = start + timedelta(minutes=s.duration_min)
+    for task in plan:
+        if (task["date"] == today and not task["is_break"] and 
+            task["completed"] == False):
+            start = datetime.strptime(f"{task['date']} {task['start_time']}", "%Y-%m-%d %H:%M")
+            end = start + timedelta(minutes=task["duration_min"])
             if start <= now <= end:
-                minutes_since_start = int((now - start).total_seconds() // 60)
-                
-                last = st.session_state["last_hydration_check"]
-                if last is None or (now - last).total_seconds() / 60 >= 10:
-                    st.session_state["last_hydration_check"] = now
-                    st.warning("💧 Hydration reminder: drink water!")
-                
-                if minutes_since_start >= 60:
-                    st.error("⏸️ Break reminder: Take a 20-minute break now!")
+                if st.session_state.last_hydration is None or (now - st.session_state.last_hydration).seconds > 600:
+                    st.session_state.last_hydration = now
+                    st.warning("💧 **HYDRATION REMINDER**: Drink water now!")
                 return
+    st.session_state.last_hydration = now
 
-
-# ---------------------- PAGES ----------------------
-def page_study():
+# ---------------------- STUDY PAGE ----------------------
+def study_page():
     st.header("📚 Study Planner")
     
     col1, col2 = st.columns(2)
     with col1:
-        module = st.text_input("Module name")
-        exam_date = st.date_input("Exam date")
+        module = st.text_input("Module Name")
+        exam_date = st.date_input("Exam Date", datetime.now())
     with col2:
-        project_deadline = st.date_input("Project deadline")
-        daily_hours = st.number_input("Daily study hours", min_value=0.5, max_value=12.0, value=2.0)
+        daily_hours = st.number_input("Daily Hours", 1.0, 8.0, 2.0)
     
-    topics_text = st.text_area("Topics (one per line)")
+    topics = st.text_area("Topics (one per line)").strip().split("\n")
+    topics = [t.strip() for t in topics if t.strip()]
     
-    if st.button("Generate Timetable"):
-        topics = [t.strip() for t in topics_text.splitlines() if t.strip()]
-        if module and topics:
-            planner = st.session_state["planner"]
-            plan = planner.plan_study(module, exam_date, project_deadline, topics, daily_hours)
-            st.session_state["study_plan"] = plan
-            save_state_to_file()
-            st.success("✅ Timetable generated!")
-
-    st.subheader("📋 Timetable")
-    plan = st.session_state["study_plan"]
-    if plan:
-        for i, task in enumerate(plan):
-            cols = st.columns([4, 1])
-            with cols[0]:
-                label = "⏸️ Break" if task.is_break else "📖 Study"
-                st.write(f"{label} | {task.date} {task.start_time} | {task.duration_min}min | {task.topic}")
-            with cols[1]:
-                if not task.is_break:
+    if st.button("🎯 Generate Timetable") and module and topics:
+        plan = st.session_state.planner.plan_study(module, exam_date, topics, daily_hours)
+        st.session_state.study_plan = plan
+        save_data({"study_plan": plan})
+        st.success("✅ Timetable created!")
+        st.rerun()
+    
+    if st.session_state.study_plan:
+        st.subheader("📋 Your Schedule")
+        for i, task in enumerate(st.session_state.study_plan):
+            col1, col2 = st.columns([5, 1])
+            with col1:
+                icon = "⏸️" if task["is_break"] else "📖"
+                status = "✅" if task["completed"] else "⏳"
+                st.write(f"{status} {icon} {task['date']} {task['start_time']} ({task['duration_min']}min) {task['topic']}")
+            with col2:
+                if not task["is_break"]:
                     key = f"study_{i}"
-                    st.session_state[key] = st.session_state.get(key, task.completed)
+                    st.session_state[key] = st.session_state.get(key, False)
                     st.checkbox("Done", key=key)
-
-        st.info(st.session_state["planner"].generate_feedback_message(plan))
+        
         st.subheader("🔔 Live Reminders")
-        check_study_reminders()
+        check_reminders()
 
-
-def page_work():
+# ---------------------- WORK PAGE ----------------------
+def work_page():
     st.header("💼 Work Planner")
     
-    st.subheader("Add Meetings")
+    st.subheader("➕ Add Meeting")
     col1, col2, col3 = st.columns(3)
-    with col1: meeting_title = st.text_input("Title")
-    with col2: meeting_date = st.date_input("Date")
-    with col3: meeting_time = st.time_input("Time")
+    with col1: title = st.text_input("Title")
+    with col2: date = st.date_input("Date")
+    with col3: time = st.time_input("Time")
     
-    if st.button("Add Meeting") and meeting_title:
-        st.session_state["temp_meetings"].append({
-            "title": meeting_title, "date": meeting_date.isoformat(),
-            "start_time": meeting_time.strftime("%H:%M"), "duration_min": 60
-        })
+    if st.button("Add Meeting") and title:
+        st.session_state.temp_meetings.append({"title": title, "date": date.isoformat(), "start_time": str(time)[:5]})
         st.rerun()
-
-    st.subheader("Generate Work Schedule")
-    if st.button("Generate") and st.session_state["temp_meetings"]:
-        planner = st.session_state["planner"]
-        tasks = planner.plan_work(st.session_state["temp_meetings"], st.session_state["temp_deadlines"])
-        st.session_state["work_tasks"] = tasks
-        save_state_to_file()
-        st.success("✅ Work schedule created!")
-
-    st.subheader("Work Tasks")
-    tasks = st.session_state["work_tasks"]
-    if tasks:
-        for i, task in enumerate(tasks):
-            cols = st.columns([4, 1])
-            with cols[0]: st.write(f"{task.date} {task.start_time} | {task.title}")
-            with cols[1]:
+    
+    if st.button("🎯 Generate Work Plan") and st.session_state.temp_meetings:
+        tasks = st.session_state.planner.plan_work(st.session_state.temp_meetings, st.session_state.temp_deadlines)
+        st.session_state.work_tasks = tasks
+        st.success("✅ Work plan created!")
+    
+    if st.session_state.work_tasks:
+        st.subheader("📋 Work Tasks")
+        for i, task in enumerate(st.session_state.work_tasks):
+            col1, col2 = st.columns([4, 1])
+            with col1:
+                st.write(f"📅 {task['date']} {task['start_time']} - {task['title']}")
+            with col2:
                 key = f"work_{i}"
-                st.session_state[key] = st.session_state.get(key, task.completed)
+                st.session_state[key] = st.session_state.get(key, False)
                 st.checkbox("Done", key=key)
 
-
-def page_health():
+# ---------------------- HEALTH PAGE ----------------------
+def health_page():
     st.header("💚 Health Tracker")
     
     today = datetime.now().date().isoformat()
     
-    col1, col2, col3 = st.columns(3)
+    col1, col2 = st.columns(2)
     with col1:
-        st.subheader("Goals")
-        water_goal = st.number_input("Water (glasses)", value=8)
-        exercise_goal = st.number_input("Exercise (min)", value=30)
+        st.subheader("🎯 Goals")
+        water_goal = st.number_input("Water (glasses)", 4, 16, 8)
+        exercise_goal = st.number_input("Exercise (min)", 0, 120, 30)
+        sleep_goal = st.number_input("Sleep (hours)", 4.0, 12.0, 8.0)
     with col2:
-        st.subheader("Actual")
-        water_done = st.number_input("Water done", value=0)
-        exercise_done = st.number_input("Exercise done", value=0)
-    with col3:
-        sleep_goal = st.number_input("Sleep goal (hrs)", value=8.0)
-        sleep_done = st.number_input("Sleep done", value=0.0)
+        st.subheader("✅ Actual")
+        water_done = st.number_input("Water done", 0, 16, 0)
+        exercise_done = st.number_input("Exercise done", 0, 120, 0)
+        sleep_done = st.number_input("Sleep done", 0.0, 12.0, 0.0)
     
-    if st.button("Save Health Data"):
-        h = HealthDay(today, water_goal, water_done, exercise_goal, exercise_done, sleep_goal, sleep_done)
-        st.session_state["health_days"][today] = h
-        save_state_to_file()
+    if st.button("💾 Save Today"):
+        health = create_health_day(today, water_goal, water_done, exercise_goal, exercise_done, sleep_goal, sleep_done)
+        st.session_state.health_days[today] = health
+        save_data({
+            "study_plan": st.session_state.study_plan,
+            "work_tasks": st.session_state.work_tasks,
+            "health_days": st.session_state.health_days
+        })
         st.success("✅ Saved!")
+    
+    if today in st.session_state.health_days:
+        h = st.session_state.health_days[today]
+        col1, col2, col3 = st.columns(3)
+        col1.metric("💧 Water", f"{h['water_taken_glasses']}/{h['water_goal_glasses']}")
+        col2.metric("🏃 Exercise", f"{h['exercise_minutes_done']}/{h['exercise_minutes_target']}")
+        col3.metric("😴 Sleep", f"{h['sleep_hours_done']}/{h['sleep_hours_target']}")
 
-
-def page_dashboard():
+# ---------------------- DASHBOARD ----------------------
+def dashboard_page():
     st.header("📊 Analytics Dashboard")
     
-    analytics = st.session_state["analytics"]
-    if not analytics["history_dates"]:
-        st.info("No data yet. Use other tabs first.")
+    if not st.session_state.study_plan and not st.session_state.work_tasks:
+        st.info("👆 Use Study/Work tabs first to see charts!")
         return
+    
+    # Simple analytics
+    study_tasks = [t for t in st.session_state.study_plan if not t["is_break"]]
+    study_done = sum(1 for t in study_tasks if t["completed"])
     
     col1, col2 = st.columns(2)
     with col1:
-        st.subheader("📚 Study Productivity")
-        study_pct = [c/t*100 if t else 0 for c,t in zip(analytics["study_completed"], analytics["study_total"])]
-        fig, ax = plt.subplots()
-        ax.bar(range(len(study_pct)), study_pct, color="skyblue")
-        ax.set_ylabel("Productivity %")
-        st.pyplot(fig)
+        st.metric("📚 Study Sessions", f"{study_done}/{len(study_tasks)}")
+        st.metric("💼 Work Tasks", f"{sum(1 for t in st.session_state.work_tasks if t['completed'])}/{len(st.session_state.work_tasks)}")
     
-    with col2:
-        st.subheader("💼 Work Performance")
-        work_pct = [c/t*100 if t else 0 for c,t in zip(analytics["work_completed"], analytics["work_total"])]
-        fig, ax = plt.subplots()
-        ax.bar(range(len(work_pct)), work_pct, color="lightgreen")
-        ax.set_ylabel("Performance %")
-        st.pyplot(fig)
-
+    # Charts
+    fig, ax = plt.subplots(1, 2, figsize=(12, 4))
+    
+    # Study progress
+    ax[0].pie([study_done, len(study_tasks)-study_done], labels=["Done", "Pending"], autopct='%1.1f%%', colors=['green', 'orange'])
+    ax[0].set_title("Study Progress")
+    
+    # Work progress  
+    work_done = sum(1 for t in st.session_state.work_tasks if t["completed"])
+    work_total = len(st.session_state.work_tasks)
+    ax[1].pie([work_done, work_total-work_done], labels=["Done", "Pending"], autopct='%1.1f%%', colors=['blue', 'lightblue'])
+    ax[1].set_title("Work Progress")
+    
+    st.pyplot(fig)
 
 # ---------------------- MAIN APP ----------------------
 def main():
-    st.set_page_config(page_title="Study • Work • Health Notifier", layout="wide")
+    st.set_page_config(page_title="Study Notifier", layout="wide")
     
-    init_session_state()
-    if "loaded_from_file" not in st.session_state:
-        load_state_from_file()
-        st.session_state["loaded_from_file"] = True
-
-    st.title("🚀 Study • Work • Health Notifier")
+    init_app()
     
-    page = st.sidebar.radio("Navigate", ["Study", "Work", "Health", "Dashboard"])
+    st.title("🚀 AI Study • Work • Health Notifier")
+    
+    page = st.sidebar.selectbox("📂 Go to", ["Study", "Work", "Health", "Dashboard"])
+    
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("""
+    ✨ **Features:**
+    - 📚 Smart study timetables  
+    - 💼 Work task planner
+    - 💚 Health tracking
+    - 🔔 Auto reminders
+    - 📊 Live analytics
+    """)
     
     if page == "Study":
-        page_study()
+        study_page()
     elif page == "Work":
-        page_work()
+        work_page()
     elif page == "Health":
-        page_health()
+        health_page()
     elif page == "Dashboard":
-        page_dashboard()
+        dashboard_page()
     
-    if st.sidebar.button("💾 Save All"):
-        save_state_to_file()
-        st.sidebar.success("Saved!")
-
+    if st.sidebar.button("💾 Save Everything"):
+        save_data({
+            "study_plan": st.session_state.study_plan,
+            "work_tasks": st.session_state.work_tasks,
+            "health_days": st.session_state.health_days
+        })
+        st.sidebar.success("✅ Saved!")
 
 if __name__ == "__main__":
     main()
+
