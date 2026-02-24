@@ -13,6 +13,7 @@ def get_uae_now():
     return datetime.now(pytz.timezone('Asia/Dubai'))
 
 # --- 2. DATA INITIALIZATION ---
+# Standardizing all keys to prevent KeyErrors
 if 'data' not in st.session_state: st.session_state.data = []
 if 'water_ml' not in st.session_state: st.session_state.water_ml = 0
 if 'last_water_check' not in st.session_state: st.session_state.last_water_check = get_uae_now()
@@ -42,12 +43,12 @@ with st.sidebar:
     st.header("🤖 AI Timetable Generator")
     mode = st.radio("Choose Mode", ["Study (Modules)", "Work (Projects)"])
     
-    name = st.text_input("Module/Project Name")
-    topics = st.text_area("List Topics/Tasks (one per line)")
+    entry_name = st.text_input("Name (Module/Project)")
+    topic_text = st.text_area("List Topics/Tasks (one per line)")
     
     if st.button("Generate AI Schedule"):
-        if name and topics:
-            items = [i.strip() for i in topics.split('\n') if i.strip()]
+        if entry_name and topic_text:
+            items = [i.strip() for i in topic_text.split('\n') if i.strip()]
             start_time = datetime.combine(now.date(), datetime.strptime("09:00", "%H:%M").time())
             
             for i, item in enumerate(items):
@@ -60,7 +61,7 @@ with st.sidebar:
                 # Break Session (30 mins)
                 b_start = (start_time + timedelta(minutes=i*90 + 60)).strftime("%H:%M")
                 st.session_state.data.append({
-                    "name": f"Break & Stretch ({name})", "track": "Health", "type": "Break", 
+                    "name": f"Break & Stretch ({entry_name})", "track": "Health", "type": "Break", 
                     "time": b_start, "status": "Pending"
                 })
             st.success("Timetable Generated!")
@@ -70,6 +71,7 @@ with st.sidebar:
     if st.button("Reset All Data"):
         st.session_state.data = []
         st.session_state.water_ml = 0
+        st.session_state.notified_cache = set()
         st.rerun()
 
 # --- 6. MAIN DASHBOARD ---
@@ -78,15 +80,15 @@ st.caption(f"Real-time: {now.strftime('%H:%M:%S')} GST")
 
 # Metrics
 m1, m2, m3, m4 = st.columns(4)
-study_p = [t for t in st.session_state.data if t['track'] == "Study (Modules)"]
-work_p = [t for t in st.session_state.data if t['track'] == "Work (Projects)"]
+study_list = [t for t in st.session_state.data if t['track'] == "Study (Modules)"]
+work_list = [t for t in st.session_state.data if t['track'] == "Work (Projects)"]
 
 with m1:
-    s_done = len([t for t in study_p if t['status'] == 'Done'])
-    st.markdown(f'<div class="metric-card"><span>📚 Study Progress</span><h3>{s_done}/{len(study_p)}</h3></div>', unsafe_allow_html=True)
+    s_done = len([t for t in study_list if t['status'] == 'Done'])
+    st.markdown(f'<div class="metric-card"><span>📚 Study Progress</span><h3>{s_done}/{len(study_list)}</h3></div>', unsafe_allow_html=True)
 with m2:
-    w_done = len([t for t in work_p if t['status'] == 'Done'])
-    st.markdown(f'<div class="metric-card"><span>💼 Work Progress</span><h3>{w_done}/{len(work_p)}</h3></div>', unsafe_allow_html=True)
+    w_done = len([t for t in work_list if t['status'] == 'Done'])
+    st.markdown(f'<div class="metric-card"><span>💼 Work Progress</span><h3>{w_done}/{len(work_list)}</h3></div>', unsafe_allow_html=True)
 with m3:
     st.markdown(f'<div class="metric-card"><span>💧 Water Intake</span><h3>{st.session_state.water_ml}ml</h3></div>', unsafe_allow_html=True)
 with m4:
@@ -100,23 +102,25 @@ with tab_tasks:
     
     with col_a:
         st.subheader("Current Focus")
+        # Fixed: Using a copy of the list to avoid index errors during rerun
         for i, t in enumerate(st.session_state.data):
             if t['status'] == "Pending":
                 style = "study-box" if "Study" in t['track'] else "work-box" if "Work" in t['track'] else "health-box"
                 c1, c2 = st.columns([4, 1])
                 c1.markdown(f'<div class="{style}"><strong>{t["time"]}</strong> — {t["name"]}</div>', unsafe_allow_html=True)
-                if c2.button("Done", key=f"d_{i}"):
+                if c2.button("Done", key=f"d_{i}_{t['name']}"):
                     t['status'] = "Done"
                     st.rerun()
                     
     with col_b:
         st.subheader("Manual Quick Entry")
-        q_name = st.text_input("Quick Task Name")
-        q_time = st.text_input("Time (HH:MM)", value=curr_time_hm)
-        q_track = st.selectbox("Category", ["Study (Modules)", "Work (Projects)", "Health"])
-        if st.button("Add Task"):
-            st.session_state.data.append({"name": q_name, "time": q_time, "track": q_track, "status": "Pending"})
-            st.rerun()
+        with st.form("quick_add"):
+            q_name = st.text_input("Task Name")
+            q_time = st.text_input("Time (HH:MM)", value=curr_time_hm)
+            q_track = st.selectbox("Category", ["Study (Modules)", "Work (Projects)", "Health"])
+            if st.form_submit_button("Add Task"):
+                st.session_state.data.append({"name": q_name, "time": q_time, "track": q_track, "status": "Pending"})
+                st.rerun()
 
 with tab_analytics:
     if st.session_state.data:
@@ -128,14 +132,17 @@ with tab_analytics:
         st.subheader("Focus Distribution")
         fig2 = px.pie(df, names="track", hole=0.5, color_discrete_sequence=px.colors.qualitative.Pastel)
         st.plotly_chart(fig2, width="stretch")
+    else:
+        st.info("No data yet to show analytics.")
 
 # --- 8. THE NOTIFICATION ENGINE ---
 
 # 💧 10-Minute Hydration & Eye-Rest Check
-time_since_last = (now - st.session_state.last_water_check).total_seconds() / 60
-if time_since_last >= 10:
-    st.toast("💧 HYDRATION: Drink water now to keep your brain sharp!", icon="🥤")
-    st.toast("👁️ EYE REST: Look 20 feet away for 20 seconds.", icon="🧘")
+# Using .total_seconds() to handle the time math correctly
+time_diff = (now - st.session_state.last_water_check).total_seconds() / 60
+if time_diff >= 10:
+    st.toast("💧 HYDRATION: Drink water now for focus!", icon="🥤")
+    st.toast("👁️ EYE REST: Follow the 20-20-20 rule.", icon="🧘")
     st.session_state.water_ml += 150
     st.session_state.last_water_check = now
 
@@ -147,6 +154,6 @@ for t in st.session_state.data:
             st.toast(f"⏰ STARTING NOW: {t['name']}", icon="🔔")
             st.session_state.notified_cache.add(nid)
 
-# Heartbeat: Refresh every second for real-time notifications
+# Heartbeat
 time.sleep(1)
 st.rerun()
