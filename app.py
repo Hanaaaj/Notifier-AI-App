@@ -1,159 +1,129 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from datetime import datetime, timedelta
-import pytz
+import google.generativeai as genai
+from datetime import datetime
+import json
 import time
 
-# --- 1. GLOBAL SYNC & CONFIG ---
-st.set_page_config(page_title="AuraFlow | Unified Assistant", page_icon="🚀", layout="wide")
+# --- 1. SETTINGS & STYLING ---
+st.set_page_config(page_title="AuraFlow Pro", page_icon="🧠", layout="wide")
 
-def get_uae_now():
-    """Universal UAE time sync to prevent TypeError."""
-    return datetime.now(pytz.timezone('Asia/Dubai'))
-
-# --- 2. DATA INITIALIZATION ---
-# Standardizing all keys to prevent KeyErrors
-if 'data' not in st.session_state: st.session_state.data = []
-if 'water_ml' not in st.session_state: st.session_state.water_ml = 0
-if 'last_water_check' not in st.session_state: st.session_state.last_water_check = get_uae_now()
-if 'notified_cache' not in st.session_state: st.session_state.notified_cache = set()
-
-# --- 3. THEME & STYLING ---
+# Modern UI Styling
 st.markdown("""
     <style>
-    .stApp { background-color: #F8F9FB; }
-    .metric-card {
-        background: white; padding: 20px; border-radius: 15px;
-        box-shadow: 0 4px 10px rgba(0,0,0,0.03); text-align: center;
-        border: 1px solid #F0F2F6;
-    }
-    .study-box { border-left: 5px solid #6366F1; background: #EEF2FF; padding: 15px; border-radius: 10px; margin-bottom: 10px; }
-    .work-box { border-left: 5px solid #10B981; background: #ECFDF5; padding: 15px; border-radius: 10px; margin-bottom: 10px; }
-    .health-box { border-left: 5px solid #F59E0B; background: #FFFBEB; padding: 15px; border-radius: 10px; margin-bottom: 10px; }
+    .main { background-color: #0e1117; }
+    div[data-testid="stMetricValue"] { color: #00ffa3; }
+    .stTabs [data-baseweb="tab-list"] { gap: 24px; }
+    .stTabs [data-baseweb="tab"] { height: 50px; white-space: pre-wrap; background-color: #1e2130; border-radius: 10px; color: white; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 4. ENGINE LOGIC ---
-now = get_uae_now()
-curr_time_hm = now.strftime("%H:%M")
+# --- 2. DATABASE MOCKUP (Persistent for Session) ---
+if 'tasks' not in st.session_state:
+    st.session_state.tasks = []
+if 'stats' not in st.session_state:
+    st.session_state.stats = {"completed": 0, "missed": 0, "water": 0}
 
-# --- 5. SIDEBAR: MODULE & AI TIMETABLE BUILDER ---
-with st.sidebar:
-    st.header("🤖 AI Timetable Generator")
-    mode = st.radio("Choose Mode", ["Study (Modules)", "Work (Projects)"])
-    
-    entry_name = st.text_input("Name (Module/Project)")
-    topic_text = st.text_area("List Topics/Tasks (one per line)")
-    
-    if st.button("Generate AI Schedule"):
-        if entry_name and topic_text:
-            items = [i.strip() for i in topic_text.split('\n') if i.strip()]
-            start_time = datetime.combine(now.date(), datetime.strptime("09:00", "%H:%M").time())
-            
-            for i, item in enumerate(items):
-                # Work/Study Session (60 mins)
-                t_start = (start_time + timedelta(minutes=i*90)).strftime("%H:%M")
-                st.session_state.data.append({
-                    "name": f"{mode}: {item}", "track": mode, "type": "Deep Work", 
-                    "time": t_start, "status": "Pending"
-                })
-                # Break Session (30 mins)
-                b_start = (start_time + timedelta(minutes=i*90 + 60)).strftime("%H:%M")
-                st.session_state.data.append({
-                    "name": f"Break & Stretch ({entry_name})", "track": "Health", "type": "Break", 
-                    "time": b_start, "status": "Pending"
-                })
-            st.success("Timetable Generated!")
-            st.rerun()
-    
-    st.divider()
-    if st.button("Reset All Data"):
-        st.session_state.data = []
-        st.session_state.water_ml = 0
-        st.session_state.notified_cache = set()
-        st.rerun()
+# --- 3. CORE LOGIC: NOTIFICATIONS & AI ---
+def send_notification(title, message):
+    """Triggers a browser-level notification."""
+    js = f"""<script>
+    if (Notification.permission === "granted") {{
+        new Notification("{title}", {{ body: "{message}" }});
+    }} else {{ Notification.requestPermission(); }}
+    </script>"""
+    st.components.v1.html(js, height=0)
 
-# --- 6. MAIN DASHBOARD ---
-st.title("AuraFlow Unified Assistant 🇦🇪")
-st.caption(f"Real-time: {now.strftime('%H:%M:%S')} GST")
+def get_ai_feedback(score):
+    """Prompt Engineering: AI Analysis of the user's day."""
+    try:
+        genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        prompt = f"The user has a productivity score of {score}%. Give one actionable, supportive tip."
+        return model.generate_content(prompt).text
+    except:
+        return "Keep focusing! Consistency is the key to success."
 
-# Metrics
-m1, m2, m3, m4 = st.columns(4)
-study_list = [t for t in st.session_state.data if t['track'] == "Study (Modules)"]
-work_list = [t for t in st.session_state.data if t['track'] == "Work (Projects)"]
+# --- 4. APP LAYOUT ---
+st.title("🌊 AuraFlow: Intelligence Notifier")
+st.caption("2026 Hackathon Submission | AI-Driven Productivity")
 
-with m1:
-    s_done = len([t for t in study_list if t['status'] == 'Done'])
-    st.markdown(f'<div class="metric-card"><span>📚 Study Progress</span><h3>{s_done}/{len(study_list)}</h3></div>', unsafe_allow_html=True)
-with m2:
-    w_done = len([t for t in work_list if t['status'] == 'Done'])
-    st.markdown(f'<div class="metric-card"><span>💼 Work Progress</span><h3>{w_done}/{len(work_list)}</h3></div>', unsafe_allow_html=True)
-with m3:
-    st.markdown(f'<div class="metric-card"><span>💧 Water Intake</span><h3>{st.session_state.water_ml}ml</h3></div>', unsafe_allow_html=True)
-with m4:
-    st.markdown(f'<div class="metric-card"><span>⏱️ Current Time</span><h3>{curr_time_hm}</h3></div>', unsafe_allow_html=True)
+# Request permissions early
+if st.button("🔔 Enable Background Notifications (Click First)"):
+    st.components.v1.html("<script>Notification.requestPermission();</script>", height=0)
 
-# --- 7. TASK TRACKING & ANALYTICS ---
-tab_tasks, tab_analytics = st.tabs(["📋 Task Manager", "📈 Progress Reports"])
+tabs = st.tabs(["🎯 Task Manager", "📈 Analytics Dashboard", "🤖 Smart Feedback"])
 
-with tab_tasks:
-    col_a, col_b = st.columns(2)
-    
-    with col_a:
-        st.subheader("Current Focus")
-        # Fixed: Using a copy of the list to avoid index errors during rerun
-        for i, t in enumerate(st.session_state.data):
-            if t['status'] == "Pending":
-                style = "study-box" if "Study" in t['track'] else "work-box" if "Work" in t['track'] else "health-box"
-                c1, c2 = st.columns([4, 1])
-                c1.markdown(f'<div class="{style}"><strong>{t["time"]}</strong> — {t["name"]}</div>', unsafe_allow_html=True)
-                if c2.button("Done", key=f"d_{i}_{t['name']}"):
-                    t['status'] = "Done"
-                    st.rerun()
-                    
-    with col_b:
-        st.subheader("Manual Quick Entry")
-        with st.form("quick_add"):
-            q_name = st.text_input("Task Name")
-            q_time = st.text_input("Time (HH:MM)", value=curr_time_hm)
-            q_track = st.selectbox("Category", ["Study (Modules)", "Work (Projects)", "Health"])
-            if st.form_submit_button("Add Task"):
-                st.session_state.data.append({"name": q_name, "time": q_time, "track": q_track, "status": "Pending"})
-                st.rerun()
-
-with tab_analytics:
-    if st.session_state.data:
-        df = pd.DataFrame(st.session_state.data)
-        st.subheader("Completion Analysis")
-        fig = px.bar(df, x="track", color="status", barmode="group", color_discrete_map={"Done": "#10B981", "Pending": "#E2E8F0"})
-        st.plotly_chart(fig, width="stretch")
+# --- TAB 1: TASK MANAGEMENT ---
+with tabs[0]:
+    col1, col2 = st.columns([1, 1])
+    with col1:
+        st.subheader("Add New Goal")
+        t_name = st.text_input("Task Title", placeholder="e.g., Weekly Sync")
+        t_type = st.selectbox("Category", ["Meeting", "Deadline", "Hydration"])
+        t_time = st.time_input("Scheduled Time", datetime.now())
         
-        st.subheader("Focus Distribution")
-        fig2 = px.pie(df, names="track", hole=0.5, color_discrete_sequence=px.colors.qualitative.Pastel)
-        st.plotly_chart(fig2, width="stretch")
+        if st.button("➕ Schedule Task"):
+            st.session_state.tasks.append({
+                "id": len(st.session_state.tasks),
+                "name": t_name,
+                "type": t_type,
+                "time": t_time.strftime("%H:%M"),
+                "status": "Pending"
+            })
+            st.toast("Task added successfully!")
+
+    with col2:
+        st.subheader("Pending Reminders")
+        for i, task in enumerate(st.session_state.tasks):
+            if task["status"] == "Pending":
+                with st.expander(f"{task['time']} - {task['name']} ({task['type']})"):
+                    if st.button(f"Mark Complete", key=f"done_{i}"):
+                        st.session_state.tasks[i]["status"] = "Completed"
+                        st.session_state.stats["completed"] += 1
+                        if task['type'] == "Hydration": st.session_state.stats["water"] += 1
+                        st.rerun()
+                    if st.button(f"Mark Missed", key=f"miss_{i}"):
+                        st.session_state.tasks[i]["status"] = "Missed"
+                        st.session_state.stats["missed"] += 1
+                        st.rerun()
+
+# --- TAB 2: ANALYTICS DASHBOARD ---
+with tabs[1]:
+    # Calculate Score
+    total = st.session_state.stats["completed"] + st.session_state.stats["missed"]
+    score = int((st.session_state.stats["completed"] / total) * 100) if total > 0 else 100
+    
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Productivity Score", f"{score}%")
+    m2.metric("Completed Tasks", st.session_state.stats["completed"])
+    m3.metric("Hydration Level", f"{st.session_state.stats['water']} Cups")
+
+    if total > 0:
+        df = pd.DataFrame([
+            {"Label": "Completed", "Value": st.session_state.stats["completed"]},
+            {"Label": "Missed", "Value": st.session_state.stats["missed"]}
+        ])
+        fig = px.bar(df, x="Label", y="Value", color="Label", 
+                     color_discrete_map={"Completed": "#00ffa3", "Missed": "#ff4b4b"},
+                     title="Task Performance Overview")
+        st.plotly_chart(fig, use_container_width=True)
     else:
-        st.info("No data yet to show analytics.")
+        st.info("No data yet. Schedule and complete tasks to generate charts!")
 
-# --- 8. THE NOTIFICATION ENGINE ---
+# --- TAB 3: SMART FEEDBACK ---
+with tabs[2]:
+    st.subheader("AI Performance Insights")
+    if total > 0:
+        feedback = get_ai_feedback(score)
+        st.success(feedback)
+    else:
+        st.write("Complete your first task to unlock AI insights.")
 
-# 💧 10-Minute Hydration & Eye-Rest Check
-# Using .total_seconds() to handle the time math correctly
-time_diff = (now - st.session_state.last_water_check).total_seconds() / 60
-if time_diff >= 10:
-    st.toast("💧 HYDRATION: Drink water now for focus!", icon="🥤")
-    st.toast("👁️ EYE REST: Follow the 20-20-20 rule.", icon="🧘")
-    st.session_state.water_ml += 150
-    st.session_state.last_water_check = now
-
-# 🔔 Scheduled Task Alerts
-for t in st.session_state.data:
-    if t['status'] == "Pending" and t['time'] == curr_time_hm:
-        nid = f"{t['name']}_{curr_time_hm}"
-        if nid not in st.session_state.notified_cache:
-            st.toast(f"⏰ STARTING NOW: {t['name']}", icon="🔔")
-            st.session_state.notified_cache.add(nid)
-
-# Heartbeat
-time.sleep(1)
-st.rerun()
+# --- 5. THE BACKGROUND TICKER (Simulated) ---
+# In a real Streamlit app, this checks if current time matches scheduled tasks
+now = datetime.now().strftime("%H:%M")
+for task in st.session_state.tasks:
+    if task["time"] == now and task["status"] == "Pending":
+        send_notification(f"Time for {task['name']}!", f"Category: {task['type']}")
