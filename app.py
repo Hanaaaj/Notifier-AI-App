@@ -1,12 +1,17 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import google.generativeai as genai
-from datetime import datetime, timedelta
+from datetime import datetime
+import pytz  # Required for UAE Time
 import time
 
 # --- 1. CONFIG & THEME ---
-st.set_page_config(page_title="AuraFlow | Smart Scheduler", page_icon="🕒", layout="wide")
+st.set_page_config(page_title="AuraFlow | UAE Smart Scheduler", page_icon="🕒", layout="wide")
+
+# Function to get UAE Time (Prevents the TypeError mismatch)
+def get_uae_now():
+    uae_tz = pytz.timezone('Asia/Dubai')
+    return datetime.now(uae_tz)
 
 st.markdown("""
     <style>
@@ -14,6 +19,7 @@ st.markdown("""
     .metric-card {
         background: white; padding: 24px; border-radius: 20px;
         box-shadow: 0 4px 12px rgba(0,0,0,0.03); border: 1px solid #F0F2F6;
+        text-align: center;
     }
     .suggestion-box {
         background-color: #FDF4FF; padding: 16px; border-radius: 12px;
@@ -29,35 +35,33 @@ if 'tasks' not in st.session_state:
 if 'water_ml' not in st.session_state:
     st.session_state.water_ml = 0
 if 'last_water_check' not in st.session_state:
-    st.session_state.last_water_check = datetime.now()
+    st.session_state.last_water_check = get_uae_now()
+if 'notified_cache' not in st.session_state:
+    st.session_state.notified_cache = set() # Prevents duplicate alerts in same minute
 
 # --- 3. INTELLIGENCE FUNCTIONS ---
 
 def get_ai_priority(task_list):
-    """Refines task ordering using AI based on category weights."""
     weights = {"Work": 50, "Study": 40, "Health": 30, "Personal": 10}
     return sorted(task_list, key=lambda x: weights.get(x['cat'], 0), reverse=True)
 
 def get_smart_suggestions():
-    """Generates proactive suggestions based on usage patterns."""
     suggestions = []
-    # Screen time suggestion
-    suggestions.append({"title": "20/20/20 Rule", "desc": "Look 20 feet away for 20 seconds", "cat": "Health"})
-    # Low water check
     if st.session_state.water_ml < 1000:
         suggestions.append({"title": "Rehydrate", "desc": "Drink 250ml water now", "cat": "Health"})
+    suggestions.append({"title": "20/20/20 Rule", "desc": "Rest your eyes from the screen", "cat": "Health"})
     return suggestions
 
 # --- 4. MAIN UI LAYOUT ---
-now = datetime.now()
+now = get_uae_now()
 curr_time = now.strftime("%H:%M")
 
 c_title, c_clock = st.columns([4, 1])
 with c_title:
     st.title(f"Good afternoon! 👋")
-    st.caption(f"Current Date: {now.strftime('%A, %B %d, %Y')}")
+    st.caption(f"UAE Standard Time: {now.strftime('%A, %B %d, %Y')}")
 with c_clock:
-    st.markdown(f'<div class="metric-card" style="text-align:center;"><b>{curr_time}</b></div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="metric-card"><b>{now.strftime("%H:%M:%S")}</b></div>', unsafe_allow_html=True)
 
 # Metric Grid
 m1, m2, m3, m4 = st.columns(4)
@@ -79,7 +83,6 @@ for s in get_smart_suggestions():
 
 st.markdown("---")
 st.markdown("### 📋 Daily Schedule")
-# AI-Powered Reordering
 sorted_queue = get_ai_priority([t for t in st.session_state.tasks if t['status'] == 'Pending'])
 
 for i, t in enumerate(sorted_queue):
@@ -90,7 +93,7 @@ for i, t in enumerate(sorted_queue):
             if original['name'] == t['name']: original['status'] = 'Done'
         st.rerun()
 
-# --- 6. ADD NEW & DASHBOARD ---
+# --- 6. ADD NEW ---
 with st.expander("➕ Create Custom Reminder"):
     c1, c2, c3 = st.columns(3)
     name = c1.text_input("Task Name")
@@ -100,22 +103,11 @@ with st.expander("➕ Create Custom Reminder"):
         st.session_state.tasks.append({"name": name, "cat": cat, "time": tm, "status": "Pending"})
         st.rerun()
 
-# Dashboard Analytics
-st.markdown("### 📈 Performance Analysis")
-tab1, tab2 = st.tabs(["Weekly Progress", "Monthly Analysis"])
+# --- 7. NOTIFICATION LOOP (THE FIX) ---
 
-with tab1:
-    # Simulated data for weekly progress
-    df_week = pd.DataFrame({'Day': ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'], 'Tasks': [5, 4, 7, 2, 5, 8, 3]})
-    fig = px.bar(df_week, x='Day', y='Tasks', color_discrete_sequence=['#A7F3D0'], title="Completion Trends")
-    st.plotly_chart(fig, use_container_width=True)
-
-with tab2:
-    st.write("AI Analysis: You complete 20% more 'Work' tasks when you log hydration before 10 AM.")
-
-# --- 7. NOTIFICATION LOOP ---
-# Check 30-min water timer
-if (now - st.session_state.last_water_check).seconds / 60 >= 30:
+# Check 30-min water timer using UAE-aware subtraction
+time_delta = now - st.session_state.last_water_check
+if time_delta.total_seconds() / 60 >= 30:
     st.toast("💧 Time to hydrate! Logging 250ml...", icon="🥛")
     st.session_state.water_ml += 250
     st.session_state.last_water_check = now
@@ -123,8 +115,11 @@ if (now - st.session_state.last_water_check).seconds / 60 >= 30:
 # Check for timed meetings/alerts
 for t in st.session_state.tasks:
     if t['status'] == "Pending" and t['time'] == curr_time:
-        st.toast(f"⏰ REMINDER: {t['name']} is starting!", icon="🔔")
+        notif_id = f"{t['name']}_{curr_time}"
+        if notif_id not in st.session_state.notified_cache:
+            st.toast(f"⏰ REMINDER: {t['name']} is starting!", icon="🔔")
+            st.session_state.notified_cache.add(notif_id)
 
-# Refresh for real-time clock
+# Real-time refresh (updates clock and checks alerts every second)
 time.sleep(1)
-if now.second == 0: st.rerun()
+st.rerun()
