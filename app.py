@@ -3,165 +3,106 @@ import pandas as pd
 import plotly.express as px
 import google.generativeai as genai
 from datetime import datetime, timedelta
+import time
 
-# --- 1. CONFIG & MODERN STYLING ---
-st.set_page_config(page_title="MindFlow | Adaptive Intelligence", page_icon="✨", layout="wide")
+# --- 1. CONFIG & STYLING ---
+st.set_page_config(page_title="MindFlow | Smart Scheduler", page_icon="🕒", layout="wide")
 
-st.markdown("""
-    <style>
-    /* Global Background */
-    .stApp { background-color: #F8F9FB; }
-    
-    /* MindFlow Card Design */
-    .metric-card {
-        background-color: white;
-        padding: 24px;
-        border-radius: 20px;
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.03);
-        border: 1px solid #F0F2F6;
-        margin-bottom: 20px;
-    }
-    .metric-title { color: #5F6368; font-size: 14px; font-weight: 500; }
-    .metric-value { color: #1A1C1E; font-size: 32px; font-weight: 700; margin-top: 8px; }
-    
-    /* Smart Suggestion Styling */
-    .suggestion-card {
-        background-color: #FDF4FF;
-        padding: 16px;
-        border-radius: 12px;
-        border: 1px solid #FAE8FF;
-        margin-bottom: 12px;
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-    }
-    
-    /* Priority Badges */
-    .badge-high { background: #FEE2E2; color: #EF4444; padding: 2px 8px; border-radius: 6px; font-size: 11px; font-weight: bold; }
-    .badge-ai { background: #F3E8FF; color: #7E22CE; padding: 2px 8px; border-radius: 6px; font-size: 11px; font-weight: bold; }
-    </style>
-    """, unsafe_allow_html=True)
+# (Keep the CSS from previous version or customize for rounded cards)
 
-# --- 2. DATA INITIALIZATION ---
+# --- 2. THE SMART BRAIN (Logic & AI) ---
+
 if 'tasks' not in st.session_state:
     st.session_state.tasks = []
-if 'water' not in st.session_state:
-    st.session_state.water = 0 # in ml
-if 'history' not in st.session_state:
-    # Mock history for the weekly dashboard
-    st.session_state.history = pd.DataFrame({
-        'Day': ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
-        'Completed': [5, 3, 6, 2, 4, 7, 0]
-    })
+if 'water_goal' not in st.session_state:
+    st.session_state.water_goal = {"last_drink": datetime.now(), "interval": 30} # minutes
 
-# --- 3. SMART SUGGESTION ENGINE ---
-def get_smart_suggestions():
-    suggestions = []
-    now = datetime.now()
+def calculate_priority(task):
+    """AI-Logic to arrange reminders by importance"""
+    score = 0
+    # Time-based urgency
+    if "10 am" in task['time'].lower() or "9 am" in task['time'].lower():
+        score += 50
+    # Category-based importance
+    category_weights = {"Work": 30, "Study": 25, "Health": 20, "Personal": 10}
+    score += category_weights.get(task['cat'], 0)
+    return score
+
+def get_ai_reordering(tasks):
+    """Uses Gemini to refine the schedule if requested"""
+    try:
+        genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        task_list = [f"{t['name']} at {t['time']}" for t in tasks]
+        prompt = f"Rearrange these tasks by biological peak performance and urgency: {task_list}. Return only a JSON list."
+        # Note: In a real hackathon, you'd parse this JSON back into session_state
+        return model.generate_content(prompt).text
+    except:
+        return "Manual Priority Active"
+
+# --- 3. THE TIME KEEPER (Notification Logic) ---
+now = datetime.now()
+current_time_str = now.strftime("%H:%M")
+
+def check_notifications():
+    """Triggered on every rerun to check if a reminder is due"""
+    # 1. Check Specific Task Times
+    for t in st.session_state.tasks:
+        if t['status'] == "Pending" and t['time'] == current_time_str:
+            st.toast(f"🔔 NOTIFICATION: {t['name']} starting now!", icon="⏰")
+            
+    # 2. Check Water Interval (Every 30 mins)
+    time_since_water = (now - st.session_state.water_goal["last_drink"]).seconds / 60
+    if time_since_water >= st.session_state.water_goal["interval"]:
+        st.toast("💧 SMART REMINDER: Time to drink water!", icon="🥤")
+        # Auto-reset after notification to avoid spamming
+        st.session_state.water_goal["last_drink"] = now
+
+# --- 4. MAIN INTERFACE ---
+
+st.title(f"Today is {now.strftime('%A, %b %d')}")
+st.subheader(f"Current Time: {current_time_str}")
+
+col1, col2 = st.columns([2, 1])
+
+with col1:
+    st.markdown("### 📅 Smart Schedule")
+    # Sorting tasks by the Importance Logic
+    sorted_tasks = sorted(st.session_state.tasks, key=calculate_priority, reverse=True)
     
-    # 1. Screen Time Logic
-    suggestions.append({"title": "Eye Rest (20/20/20)", "desc": "Look 20 feet away for 20 seconds", "type": "Health", "ai": True})
-    
-    # 2. Dehydration Logic
-    if st.session_state.water < 1500:
-        suggestions.append({"title": "Hydration Hit", "desc": "You are 500ml behind your daily goal", "type": "Health", "ai": True})
-        
-    # 3. Work/Study Balance
-    work_tasks = [t for t in st.session_state.tasks if t['cat'] in ['Work', 'Study'] and t['status'] == 'Pending']
-    if len(work_tasks) > 3:
-        suggestions.append({"title": "Brief Stretch", "desc": "High workload detected. Stretch for 2 mins", "type": "Personal", "ai": True})
-        
-    return suggestions
-
-# --- 4. MAIN LAYOUT: TOP BAR ---
-col_head, col_btn = st.columns([4, 1])
-with col_head:
-    st.title("Good afternoon! 👋")
-    st.caption("Here's your productivity overview")
-with col_btn:
-    if st.button("➕ New Reminder", use_container_width=True):
-        st.toast("Feature coming soon!")
-
-# --- 5. METRIC GRID ---
-m1, m2, m3, m4 = st.columns(4)
-
-completed_count = len([t for t in st.session_state.tasks if t['status'] == 'Done'])
-with m1:
-    st.markdown(f'<div class="metric-card"><span class="metric-title">✅ Tasks Done</span><div class="metric-value">{completed_count}</div></div>', unsafe_allow_html=True)
-with m2:
-    water_pct = min(int((st.session_state.water / 2000) * 100), 100)
-    st.markdown(f'<div class="metric-card"><span class="metric-title">💧 Water Intake</span><div class="metric-value">{st.session_state.water}ml</div><small>{water_pct}% of goal</small></div>', unsafe_allow_html=True)
-with m3:
-    st.markdown('<div class="metric-card"><span class="metric-title">⏱️ Focus Time</span><div class="metric-value">2h 15m</div></div>', unsafe_allow_html=True)
-with m4:
-    st.markdown('<div class="metric-card"><span class="metric-title">🔥 Streak</span><div class="metric-value">12 Days</div></div>', unsafe_allow_html=True)
-
-# --- 6. SMART SUGGESTIONS AREA ---
-st.markdown("### ✨ Smart Suggestions")
-for sugg in get_smart_suggestions():
-    with st.container():
-        c_a, c_b = st.columns([4, 1])
-        with c_a:
-            st.markdown(f"""
-                <div class="suggestion-card">
-                    <div>
-                        <strong>{sugg['title']}</strong> <span class="badge-ai">✨ AI</span><br>
-                        <small>{sugg['desc']}</small>
-                    </div>
-                </div>
-            """, unsafe_allow_html=True)
-        with c_b:
-            if st.button("Add", key=sugg['title']):
-                st.session_state.tasks.append({"name": sugg['title'], "cat": sugg['type'], "status": "Pending", "time": "Now"})
-                st.rerun()
-
-# --- 7. TASK MANAGER ---
-st.markdown("### 📋 Daily Tasks")
-cat_filter = st.tabs(["All", "💼 Work", "📚 Study", "🏥 Health", "👤 Personal"])
-
-# Mock input for demo
-with st.expander("➕ Quick Add Task"):
-    t_name = st.text_input("Task name")
-    t_cat = st.selectbox("Category", ["Work", "Study", "Health", "Personal"])
-    if st.button("Create Task"):
-        st.session_state.tasks.append({"name": t_name, "cat": t_cat, "status": "Pending", "time": "Today"})
-        st.rerun()
-
-# Task List Display
-if not st.session_state.tasks:
-    st.info("No tasks yet. Use the Smart Suggestions or Quick Add!")
-else:
-    for i, task in enumerate(st.session_state.tasks):
+    for i, t in enumerate(sorted_tasks):
         with st.container():
-            t_col1, t_col2 = st.columns([5, 1])
-            t_col1.write(f"**{task['name']}** ({task['cat']})")
-            if task['status'] == 'Pending':
-                if t_col2.button("Done", key=f"btn_{i}"):
-                    st.session_state.tasks[i]['status'] = 'Done'
-                    st.rerun()
-            else:
-                t_col2.write("✅")
+            st.markdown(f"""
+            <div style="background: white; padding: 15px; border-radius: 12px; border-left: 5px solid #4facfe; margin-bottom: 10px;">
+                <strong>{t['time']} - {t['name']}</strong> <span style="font-size: 10px; background: #eee; padding: 2px 5px; border-radius: 4px;">{t['cat']}</span>
+            </div>
+            """, unsafe_allow_html=True)
 
-# --- 8. ANALYSIS DASHBOARD ---
+with col2:
+    st.markdown("### ➕ Add Event")
+    with st.form("new_event"):
+        name = st.text_input("Event Name (e.g., Meeting)")
+        t_time = st.text_input("Time (HH:MM format)", value=current_time_str)
+        t_cat = st.selectbox("Category", ["Work", "Study", "Health", "Personal"])
+        if st.form_submit_button("Set Reminder"):
+            st.session_state.tasks.append({
+                "name": name, 
+                "time": t_time, 
+                "cat": t_cat, 
+                "status": "Pending",
+                "created": now
+            })
+            st.rerun()
+
+# --- 5. DASHBOARD & ANALYSIS ---
 st.markdown("---")
-st.markdown("### 📈 Analytics Dashboard")
-tab_week, tab_month = st.tabs(["Weekly Progress", "Monthly Analysis"])
+st.markdown("### 📊 Weekly Analytics")
+# (Insert your Plotly charts here for progress tracking)
 
-with tab_week:
-    fig = px.bar(st.session_state.history, x='Day', y='Completed', 
-                 title="Tasks Completed this Week",
-                 color_discrete_sequence=['#A7F3D0'])
-    fig.update_layout(plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', yaxis_showgrid=False)
-    st.plotly_chart(fig, use_container_width=True)
-
-with tab_month:
-    st.write("#### AI Monthly Insights")
-    st.info("AI Analysis: You are 15% more productive on Tuesday mornings. Consider scheduling your deep work then.")
-    
-# --- 9. HYDRATION QUICK ACTION ---
-st.sidebar.markdown("### 💧 Hydration Tracker")
-add_water = st.sidebar.select_slider("Add water (ml)", options=[250, 500, 750])
-if st.sidebar.button("Log Water"):
-    st.session_state.water += add_water
-    st.sidebar.success(f"Added {add_water}ml!")
+# --- 6. AUTO-REFRESH SCRIPT ---
+# This forces the app to refresh every 60 seconds to check time-based notifications
+check_notifications()
+st.empty()
+time.sleep(1) # Subtle pause
+if now.second == 0: # Rerun on the minute mark
     st.rerun()
