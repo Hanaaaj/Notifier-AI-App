@@ -2,102 +2,109 @@ import streamlit as st
 import google.generativeai as genai
 import json
 import time
+import pandas as pd
+import plotly.express as px
 from datetime import datetime
 
-# --- 1. CONFIGURATION & THEME ---
-st.set_page_config(page_title="AuraFlow AI", page_icon="🌊", layout="centered")
+# --- 1. INITIALIZATION & UI THEME ---
+if 'history' not in st.session_state:
+    st.session_state.history = []
+if 'score' not in st.session_state:
+    st.session_state.score = 100
 
-# Custom Professional CSS
+st.set_page_config(page_title="AuraFlow Pro", page_icon="🌊", layout="wide")
+
 st.markdown("""
     <style>
-    .stApp { background-color: #0e1117; color: #ffffff; }
-    .status-card {
+    .metric-card {
         background: rgba(255, 255, 255, 0.05);
-        border-radius: 15px;
-        padding: 20px;
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        margin-bottom: 20px;
+        padding: 20px; border-radius: 15px; border: 1px solid #444;
+        text-align: center;
     }
+    .stProgress > div > div > div > div { background-image: linear-gradient(to right, #00f2fe, #4facfe); }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. THE NOTIFICATION ENGINE (JavaScript) ---
-def trigger_notification(title, body):
-    js_code = f"""
-    <script>
-    function notify() {{
-        if (!("Notification" in window)) {{
-            console.log("Browser does not support desktop notification");
-        }} else if (Notification.permission === "granted") {{
-            new Notification("{title}", {{ body: "{body}", icon: "https://cdn-icons-png.flaticon.com/512/3119/3119338.png" }});
-        }} else if (Notification.permission !== "denied") {{
-            Notification.requestPermission();
-        }}
-    }}
-    notify();
-    </script>
-    """
-    st.components.v1.html(js_code, height=0)
+# --- 2. THE NOTIFICATION & SMART FEEDBACK ENGINE ---
+def notify(title, body):
+    js = f"""<script>
+    if (Notification.permission === "granted") {{
+        new Notification("{title}", {{ body: "{body}" }});
+    }} else {{ Notification.requestPermission(); }}
+    </script>"""
+    st.components.v1.html(js, height=0)
 
-# --- 3. AI PROMPT ENGINEERING LOGIC ---
-def process_user_intent(user_input):
+def ai_brain(user_text, mode="parse"):
     try:
         genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
         model = genai.GenerativeModel('gemini-1.5-flash')
+        if mode == "parse":
+            prompt = f"Return ONLY JSON: {{'task': str, 'mins': int, 'type': 'Work'|'Hydration', 'tip': str}}. Input: {user_text}"
+        else:
+            prompt = f"Give a 1-sentence sarcastic but motivating feedback for someone with a productivity score of {st.session_state.score}%."
         
-        system_prompt = (
-            "You are a productivity agent. Extract JSON from user input. "
-            "Keys: 'task' (string), 'minutes' (int), 'category' (Health/Work/Focus), "
-            "and 'motivation' (short punchy quote). "
-            "Example: 'Remind me to drink water' -> {'task': 'Hydration', 'minutes': 30, 'category': 'Health', 'motivation': 'Fuel your cells!'}"
-            "Return ONLY JSON."
-        )
-        
-        response = model.generate_content(f"{system_prompt}\nUser says: {user_input}")
-        # Clean potential markdown formatting from AI
-        clean_json = response.text.replace('```json', '').replace('```', '').strip()
-        return json.loads(clean_json)
-    except Exception as e:
-        # Robust Fallback for Evaluation (Functionality)
-        return {"task": "Custom Task", "minutes": 30, "category": "Focus", "motivation": "Stay on track!"}
+        response = model.generate_content(prompt)
+        return json.loads(response.text.replace('```json', '').replace('```', '')) if mode == "parse" else response.text
+    except:
+        return {"task": "Focus Session", "mins": 25, "type": "Work", "tip": "Just start!"} if mode == "parse" else "Keep pushing!"
 
-# --- 4. DASHBOARD UI ---
-st.title("🌊 AuraFlow AI")
-st.caption("Intelligent Desktop Reminders • Hackathon Edition")
-
-# Request Permissions Button (For the Professor)
-if st.button("🔔 Enable Desktop Alerts"):
-    st.components.v1.html("<script>Notification.requestPermission();</script>", height=0)
-    st.toast("Permissions requested! Make sure to click 'Allow' in your browser.")
-
-st.markdown("---")
-
-# Input Section
-user_input = st.text_input("Enter a goal (e.g., 'I need to stretch every 45 mins')", placeholder="Type here...")
-
-if st.button("✨ Initialize Smart Timer"):
-    if user_input:
-        with st.spinner("AI is analyzing your schedule..."):
-            data = process_user_intent(user_input)
-            st.session_state.current_task = data
-            st.session_state.start_time = time.time()
-            
-            st.success(f"Successfully scheduled: {data['task']}")
-            trigger_notification("AuraFlow Activated", f"I'll remind you to {data['task']} in {data['minutes']} minutes.")
-
-# --- 5. ACTIVE MONITOR ---
-if "current_task" in st.session_state:
-    task = st.session_state.current_task
+# --- 3. SIDEBAR (Professor Control Panel) ---
+with st.sidebar:
+    st.title("Settings")
+    if st.button("🔔 Reset Notification Permissions"):
+        st.components.v1.html("<script>Notification.requestPermission();</script>", height=0)
     
-    st.markdown(f"""
-    <div class="status-card">
-        <h3>🚀 Active: {task['task']}</h3>
-        <p><b>Category:</b> {task['category']} | <b>Interval:</b> {task['minutes']} mins</p>
-        <p style="font-style: italic; color: #00ffa3;">"{task['motivation']}"</p>
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown("---")
+    st.write("### AI Smart Feedback")
+    if st.button("Get AI Performance Review"):
+        st.info(ai_brain("", mode="feedback"))
 
-    # Demo Trigger for Evaluation
-    if st.button("⏩ Simulate Time Elapsed (Test Alert)"):
-        trigger_notification(f"Time for {task['task']}!", task['motivation'])
-        st.balloons()
+# --- 4. MAIN DASHBOARD ---
+st.title("🌊 AuraFlow Intelligence")
+t1, t2, t3 = st.tabs(["🎯 Focus Room", "📊 Analytics", "📜 Logs"])
+
+with t1:
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+        u_input = st.text_input("What are we doing?", placeholder="e.g. Work on thesis for 40 mins")
+        if st.button("🚀 Start Intelligent Timer"):
+            data = ai_brain(u_input)
+            st.session_state.active_task = data
+            st.session_state.start_time = time.time()
+            notify("AuraFlow Started", f"Timer set for {data['task']}")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with col2:
+        st.metric("Productivity Score", f"{st.session_state.score}%", delta="Live")
+        if 'active_task' in st.session_state:
+            if st.button("✅ Mark as Complete"):
+                st.session_state.history.append({
+                    "Task": st.session_state.active_task['task'],
+                    "Type": st.session_state.active_task['type'],
+                    "Time": datetime.now().strftime("%H:%M"),
+                    "Status": "Completed"
+                })
+                st.session_state.score = min(100, st.session_state.score + 5)
+                st.success("Task Logged!")
+                del st.session_state.active_task
+
+with t2:
+    if st.session_state.history:
+        df = pd.DataFrame(st.session_state.history)
+        c1, c2 = st.columns(2)
+        with c1:
+            fig1 = px.pie(df, names='Type', title="Task Distribution", hole=0.4, color_discrete_sequence=px.colors.sequential.RdBu)
+            st.plotly_chart(fig1, use_container_width=True)
+        with c2:
+            st.write("### Activity Density")
+            st.bar_chart(df['Type'].value_counts())
+    else:
+        st.info("No data yet. Complete a task to see analytics!")
+
+with t3:
+    st.table(st.session_state.history if st.session_state.history else pd.DataFrame(columns=["Task", "Type", "Time", "Status"]))
+
+# --- 5. BACKGROUND TICKER ---
+if 'active_task' in st.session_state:
+    st.toast(f"Current Focus: {st.session_state.active_task['task']}")
