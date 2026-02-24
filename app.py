@@ -1,142 +1,142 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
 import time
 
-# --- 1. SETTINGS & UAE TIMEZONE ---
-st.set_page_config(page_title="AuraFlow | Smart Dashboard", page_icon="🕒", layout="wide")
+# --- 1. SETUP & THEME ---
+st.set_page_config(page_title="AuraFlow Study", page_icon="🎓", layout="wide")
 
 def get_uae_now():
-    """Ensures all time objects are UAE-aware to prevent TypeErrors."""
     uae_tz = pytz.timezone('Asia/Dubai')
     return datetime.now(uae_tz)
 
-# --- 2. MODERN UI STYLING ---
 st.markdown("""
     <style>
     .stApp { background-color: #F8F9FB; }
     .metric-card {
-        background: white; padding: 24px; border-radius: 20px;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.03); border: 1px solid #F0F2F6;
-        text-align: center;
+        background: white; padding: 20px; border-radius: 15px;
+        box-shadow: 0 4px 10px rgba(0,0,0,0.03); text-align: center;
+    }
+    .deadline-card {
+        background: #FFFBEB; border-left: 5px solid #F59E0B;
+        padding: 15px; border-radius: 10px; margin-bottom: 10px;
     }
     .suggestion-box {
-        background-color: #FDF4FF; padding: 16px; border-radius: 12px;
-        border: 1px solid #FAE8FF; margin-bottom: 12px;
-        border-left: 5px solid #7E22CE;
+        background-color: #F0F9FF; border-left: 5px solid #0EA5E9;
+        padding: 15px; border-radius: 10px; margin-bottom: 12px;
     }
-    .badge-ai { background: #F3E8FF; color: #7E22CE; padding: 2px 8px; border-radius: 6px; font-size: 11px; font-weight: bold; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 3. PERSISTENT STATE ---
+# --- 2. PERSISTENT STATE ---
+if 'deadlines' not in st.session_state:
+    st.session_state.deadlines = [] # Stores: Subject, Date, Type (Exam/Project)
 if 'tasks' not in st.session_state:
     st.session_state.tasks = []
-if 'water_ml' not in st.session_state:
-    st.session_state.water_ml = 0
 if 'last_water_check' not in st.session_state:
     st.session_state.last_water_check = get_uae_now()
 if 'notified_cache' not in st.session_state:
     st.session_state.notified_cache = set()
 
-# --- 4. ENGINE LOGIC ---
+# --- 3. THE STUDY AI LOGIC ---
 now = get_uae_now()
 curr_time_hm = now.strftime("%H:%M")
 
-def get_smart_suggestions():
-    """AI logic to suggest health and focus reminders."""
+def get_study_suggestions():
     suggestions = []
-    if st.session_state.water_ml < 1500:
-        suggestions.append({"title": "Hydration Hit", "desc": "Drink 250ml to stay focused.", "cat": "Health"})
-    # Afternoon energy slump check (UAE Time)
-    if 13 <= now.hour <= 16:
-        suggestions.append({"title": "Post-Lunch Walk", "desc": "Quick 5-min walk for energy.", "cat": "Health"})
-    suggestions.append({"title": "20/20/20 Rule", "desc": "Rest your eyes from the screen.", "cat": "Personal"})
+    
+    # 1. Deadline Proximity Check
+    for dl in st.session_state.deadlines:
+        days_left = (dl['date'] - now.date()).days
+        if 0 < days_left <= 7:
+            suggestions.append({
+                "title": f"Prep: {dl['subject']}",
+                "desc": f"{days_left} days until {dl['type']}. Start a 45-min deep work session.",
+                "cat": "Study"
+            })
+    
+    # 2. Wellness / Resilience Check
+    suggestions.append({"title": "Active Break", "desc": "Do 10 jumping jacks to boost brain blood flow.", "cat": "Exercise"})
+    suggestions.append({"title": "Mindful Hydration", "desc": "Drink a glass of water before next module.", "cat": "Health"})
+    
     return suggestions
 
-# --- 5. TOP BAR & CLOCK ---
-c_title, c_clock = st.columns([4, 1])
-with c_title:
-    st.title("Good afternoon! 👋")
-    st.caption(f"UAE Standard Time | {now.strftime('%A, %b %d, %Y')}")
-with c_clock:
-    st.markdown(f'<div class="metric-card"><b>{now.strftime("%H:%M:%S")}</b></div>', unsafe_allow_html=True)
+# --- 4. TOP BAR & STATS ---
+st.title("🎓 Academic Resilience Planner")
+st.caption(f"UAE Time: {now.strftime('%A, %b %d')} | Tracking {len(st.session_state.deadlines)} Deadlines")
 
-# --- 6. DASHBOARD METRICS ---
-m1, m2, m3, m4 = st.columns(4)
-done_tasks = len([t for t in st.session_state.tasks if t.get('status') == 'Done'])
+m1, m2, m3 = st.columns(3)
+with m1: st.markdown(f'<div class="metric-card"><span>Active Projects</span><h3>{len(st.session_state.deadlines)}</h3></div>', unsafe_allow_html=True)
+with m2: st.markdown(f'<div class="metric-card"><span>Next Break In</span><h3>25m</h3></div>', unsafe_allow_html=True)
+with m3: st.markdown(f'<div class="metric-card"><span>Study Streak</span><h3>4 Days</h3></div>', unsafe_allow_html=True)
 
-with m1: st.markdown(f'<div class="metric-card"><span>Tasks Done</span><h3>{done_tasks}</h3></div>', unsafe_allow_html=True)
-with m2: st.markdown(f'<div class="metric-card"><span>Water Log</span><h3>{st.session_state.water_ml}ml</h3></div>', unsafe_allow_html=True)
-with m3: st.markdown('<div class="metric-card"><span>Focus Time</span><h3>2.4h</h3></div>', unsafe_allow_html=True)
-with m4: st.markdown('<div class="metric-card"><span>Streak</span><h3>12</h3></div>', unsafe_allow_html=True)
+# --- 5. DEADLINE INPUT ---
+with st.sidebar:
+    st.header("📌 Add Deadline")
+    sub = st.text_input("Subject/Module")
+    d_type = st.selectbox("Type", ["Exam", "Project Deadline", "Quiz"])
+    d_date = st.date_input("Date", min_value=now.date())
+    if st.button("Log Deadline"):
+        st.session_state.deadlines.append({"subject": sub, "type": d_type, "date": d_date})
+        st.rerun()
 
-# --- 7. SMART AI SUGGESTIONS ---
-st.markdown("### ✨ Smart Suggestions")
-for s in get_smart_suggestions():
+    st.header("⏰ Custom Reminder")
+    r_name = st.text_input("Task Name")
+    r_time = st.text_input("Time (HH:MM)", value=curr_time_hm)
+    if st.button("Set Alarm"):
+        st.session_state.tasks.append({"name": r_name, "time": r_time, "status": "Pending", "cat": "Study"})
+        st.rerun()
+
+# --- 6. AI SUGGESTIONS (The "When to Start" Engine) ---
+st.subheader("✨ AI Study Strategy")
+suggestions = get_study_suggestions()
+for s in suggestions:
     col_s1, col_s2 = st.columns([5, 1])
     col_s1.markdown(f"""
         <div class="suggestion-box">
-            <strong>{s['title']}</strong> <span class="badge-ai">AI</span><br>
-            <small>{s['desc']}</small>
+            <strong>[{s['cat']}] {s['title']}</strong><br><small>{s['desc']}</small>
         </div>
         """, unsafe_allow_html=True)
-    if col_s2.button("Add", key=s['title']):
+    if col_s2.button("Start Now", key=s['title']):
         st.session_state.tasks.append({"name": s['title'], "cat": s['cat'], "time": curr_time_hm, "status": "Pending"})
         st.rerun()
 
-# --- 8. REMINDERS & SCHEDULING ---
-st.markdown("---")
-st.subheader("📋 Scheduled Reminders")
+# --- 7. DASHBOARD & TIMELINE ---
+st.divider()
+c_left, c_right = st.columns(2)
 
-if not st.session_state.tasks:
-    st.info("No reminders set yet. Use the expander below or AI suggestions!")
+with c_left:
+    st.subheader("📅 Upcoming Deadlines")
+    for dl in sorted(st.session_state.deadlines, key=lambda x: x['date']):
+        st.markdown(f"""
+            <div class="deadline-card">
+                <strong>{dl['date'].strftime('%b %d')}</strong> — {dl['subject']} ({dl['type']})
+            </div>
+            """, unsafe_allow_html=True)
 
-# Display Tasks
-for i, t in enumerate(st.session_state.tasks):
-    if t['status'] == 'Pending':
-        col_t1, col_t2 = st.columns([5, 1])
-        col_t1.info(f"**{t['time']}** — {t['name']} ({t['cat']})")
-        if col_t2.button("Done", key=f"d_{i}"):
-            t['status'] = 'Done'
-            st.rerun()
+with c_right:
+    st.subheader("📈 Study Workload")
+    if st.session_state.deadlines:
+        df = pd.DataFrame(st.session_state.deadlines)
+        fig = px.histogram(df, x="date", title="Exam/Project Density", color_discrete_sequence=['#F59E0B'])
+        st.plotly_chart(fig, width='stretch')
 
-# Add New Reminder
-with st.expander("➕ Set New Manual Reminder"):
-    ca, cb, cc = st.columns(3)
-    r_name = ca.text_input("Reminder Name")
-    r_time = cb.text_input("Time (HH:MM)", value=curr_time_hm)
-    r_cat = cc.selectbox("Category", ["Work", "Study", "Health", "Personal"])
-    if st.button("Schedule Alert"):
-        st.session_state.tasks.append({"name": r_name, "cat": r_cat, "time": r_time, "status": "Pending"})
-        st.rerun()
-
-# --- 9. ANALYTICS ---
-st.markdown("---")
-st.subheader("📈 Performance Analysis")
-df_week = pd.DataFrame({'Day': ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'], 'Tasks': [5, 4, 7, 2, 5, 8, 3]})
-fig = px.bar(df_week, x='Day', y='Tasks', color_discrete_sequence=['#A7F3D0'])
-# Fixed width parameter for Streamlit 2026
-st.plotly_chart(fig, width='stretch')
-
-# --- 10. NOTIFICATION ENGINE (LIVE) ---
-# Water Timer: Uses total_seconds() to compare aware datetimes
+# --- 8. LIVE NOTIFICATION LOOP ---
+# Water & Movement Loop
 time_diff = now - st.session_state.last_water_check
 if time_diff.total_seconds() / 60 >= 30:
-    st.toast("💧 UAE Health: Time to drink water!", icon="🥛")
-    st.session_state.water_ml += 250
+    st.toast("💧 Health Check: Drink water & stretch for 2 mins!", icon="🧘")
     st.session_state.last_water_check = now
 
-# Scheduled Alerts
+# Reminder Popups
 for t in st.session_state.tasks:
     if t['status'] == "Pending" and t['time'] == curr_time_hm:
         notif_id = f"{t['name']}_{curr_time_hm}"
         if notif_id not in st.session_state.notified_cache:
-            st.toast(f"⏰ REMINDER: {t['name']} is starting now!", icon="🔔")
+            st.toast(f"🔔 STUDY ALERT: {t['name']}", icon="📖")
             st.session_state.notified_cache.add(notif_id)
 
-# The Heartbeat: Reruns the script to update clock and check times
 time.sleep(1)
 st.rerun()
