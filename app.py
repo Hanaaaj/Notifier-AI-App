@@ -1,27 +1,42 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import google.generativeai as genai
 import json
 import threading
 import time
 import math
-from datetime import datetime, timedelta
+from datetime import datetime
+from google import genai
 
-# =========================
-# CONFIG
-# =========================
-st.set_page_config(page_title="MindFlow | Adaptive Intelligence", page_icon="✨", layout="wide")
+# ==========================================================
+# PAGE CONFIG
+# ==========================================================
+st.set_page_config(
+    page_title="MindFlow | Adaptive Intelligence",
+    page_icon="✨",
+    layout="wide"
+)
 
-# Gemini (FIXED MODEL)
-genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-model = genai.GenerativeModel("gemini-1.5-turbo")
+# ==========================================================
+# GEMINI SETUP (NEW SDK - WORKING VERSION)
+# ==========================================================
+client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
 
+def generate_ai_feedback(prompt):
+    try:
+        response = client.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=prompt
+        )
+        return response.text
+    except Exception as e:
+        return f"AI temporarily unavailable: {e}"
+
+# ==========================================================
+# DATA STORAGE
+# ==========================================================
 DATA_FILE = "mindflow_data.json"
 
-# =========================
-# SAFE DATA LOAD/SAVE
-# =========================
 def load_data():
     try:
         with open(DATA_FILE, "r") as f:
@@ -45,18 +60,15 @@ if "tasks" not in st.session_state:
 if "water" not in st.session_state:
     st.session_state.water = 0
 
-if "study_plan" not in st.session_state:
-    st.session_state.study_plan = {}
-
 if "hydration_alert" not in st.session_state:
     st.session_state.hydration_alert = False
 
-# =========================
-# BACKGROUND HYDRATION THREAD
-# =========================
+# ==========================================================
+# BACKGROUND HYDRATION REMINDER (NON-BLOCKING)
+# ==========================================================
 def hydration_loop():
     while True:
-        time.sleep(600)  # 10 min
+        time.sleep(600)  # 10 minutes
         st.session_state.hydration_alert = True
 
 if "thread_started" not in st.session_state:
@@ -65,18 +77,18 @@ if "thread_started" not in st.session_state:
     st.session_state.thread_started = True
 
 if st.session_state.hydration_alert:
-    st.warning("💧 Time to hydrate!")
+    st.warning("💧 Hydration Reminder: Drink Water!")
     st.session_state.hydration_alert = False
 
-# =========================
-# RULE-BASED STUDY ENGINE
-# =========================
+# ==========================================================
+# STUDY ENGINE (RULE-BASED AI)
+# ==========================================================
 def generate_study_plan(module, exam_date, topics, daily_hours):
     today = datetime.today().date()
     days_remaining = (exam_date - today).days
 
     if days_remaining <= 0:
-        raise ValueError("Exam must be future date.")
+        raise ValueError("Exam date must be in the future.")
 
     topics_per_day = math.ceil(len(topics) / days_remaining)
 
@@ -96,8 +108,8 @@ def generate_study_plan(module, exam_date, topics, daily_hours):
             "topics": daily_topics,
             "study_hours": daily_hours,
             "break_rule": "20 min break after 60 min",
-            "hydration": "Every 10 min",
-            "exercise": "After 3 hours"
+            "hydration": "Every 10 minutes",
+            "exercise": "After 3 hours study"
         }
         topic_index += topics_per_day
 
@@ -108,9 +120,9 @@ def generate_study_plan(module, exam_date, topics, daily_hours):
         "schedule": schedule
     }
 
-# =========================
+# ==========================================================
 # WORK ENGINE
-# =========================
+# ==========================================================
 def generate_focus_blocks(tasks, priorities):
     combined = list(zip(tasks, priorities))
     combined.sort(key=lambda x: x[1])
@@ -119,34 +131,34 @@ def generate_focus_blocks(tasks, priorities):
     for task, p in combined:
         blocks.append({
             "task": task,
-            "focus_block": "90 mins",
-            "hydration": "Every 10 mins",
-            "screen_break": "5 min after 60 mins",
+            "focus_block": "90 minutes",
+            "hydration": "Every 10 minutes",
+            "screen_break": "5 min after 60 minutes",
             "priority": p
         })
     return blocks
 
-# =========================
+# ==========================================================
 # HEALTH ENGINE
-# =========================
+# ==========================================================
 def calculate_wellness(water, exercise, sleep):
     score = (water/2000)*40 + (exercise/60)*30 + (sleep/8)*30
     return round(min(score, 100), 2)
 
-# =========================
+# ==========================================================
 # UI HEADER
-# =========================
+# ==========================================================
 st.title("MindFlow Adaptive Intelligence ✨")
 st.caption("AI-powered Study • Work • Health Optimizer")
 
-# =========================
+# ==========================================================
 # NAVIGATION
-# =========================
+# ==========================================================
 section = st.sidebar.radio("Navigate", ["Study", "Work", "Health", "Dashboard"])
 
-# =========================
+# ==========================================================
 # STUDY SECTION
-# =========================
+# ==========================================================
 if section == "Study":
     st.header("📚 AI Study Planner")
 
@@ -160,24 +172,20 @@ if section == "Study":
             topic_list = [t.strip() for t in topics.split(",")]
             plan = generate_study_plan(module, exam_date, topic_list, daily_hours)
 
-            st.session_state.study_plan = plan
-            save_data(plan)
-
             st.success("Study Plan Generated!")
             st.json(plan)
 
-            # Gemini Smart Feedback
-            response = model.generate_content(
-                f"Give smart motivational feedback for this plan: {plan}"
+            feedback = generate_ai_feedback(
+                f"Provide motivational academic feedback for this study plan: {plan}"
             )
-            st.info(response.text)
+            st.info(feedback)
 
         except Exception as e:
             st.error(str(e))
 
-# =========================
+# ==========================================================
 # WORK SECTION
-# =========================
+# ==========================================================
 elif section == "Work":
     st.header("💼 Work Focus Planner")
 
@@ -197,13 +205,12 @@ elif section == "Work":
         except Exception as e:
             st.error(str(e))
 
-# =========================
+# ==========================================================
 # HEALTH SECTION
-# =========================
+# ==========================================================
 elif section == "Health":
     st.header("🏥 Health Optimizer")
 
-    hydration_goal = st.number_input("Hydration Goal (ml)", 500, 4000, 2000)
     exercise = st.number_input("Exercise Minutes", 0, 180, 30)
     sleep = st.number_input("Sleep Hours", 4, 12, 7)
 
@@ -211,32 +218,31 @@ elif section == "Health":
         score = calculate_wellness(st.session_state.water, exercise, sleep)
         st.metric("Wellness Score", f"{score}/100")
 
-# =========================
+# ==========================================================
 # DASHBOARD
-# =========================
+# ==========================================================
 elif section == "Dashboard":
     st.header("📊 Performance Dashboard")
 
     completed = len([t for t in st.session_state.tasks if t.get("status") == "Done"])
-    missed = len([t for t in st.session_state.tasks if t.get("status") == "Pending"])
+    pending = len([t for t in st.session_state.tasks if t.get("status") == "Pending"])
 
     df = pd.DataFrame({
         "Status": ["Completed", "Pending"],
-        "Count": [completed, missed]
+        "Count": [completed, pending]
     })
 
     fig = px.bar(df, x="Status", y="Count", color="Status")
     st.plotly_chart(fig, use_container_width=True)
 
-    # Productivity Trend Mock
     trend = [3, 5, 4, 6, 7, 5, 8]
     trend_df = pd.DataFrame({"Day": range(1, 8), "Score": trend})
     fig2 = px.line(trend_df, x="Day", y="Score", title="Productivity Trend")
     st.plotly_chart(fig2, use_container_width=True)
 
-# =========================
-# SIDEBAR HYDRATION TRACKER
-# =========================
+# ==========================================================
+# SIDEBAR HYDRATION
+# ==========================================================
 st.sidebar.markdown("### 💧 Hydration Tracker")
 add_water = st.sidebar.select_slider("Add water (ml)", options=[250, 500, 750])
 if st.sidebar.button("Log Water"):
